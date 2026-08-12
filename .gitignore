@@ -1,0 +1,48 @@
+# ── Docs ────────────────────────────────────────────────────────────
+# Ignore all Markdown docs except the README and the LMS integration notes.
+# LMS_INTEGRATION.md carries the API-key rotation warning - it must travel with
+# the code, not sit on one machine.
+#
+# This also keeps CONTEXT.md and docs/PLATFORM-ANALYSIS.md off the remote,
+# which matters: both quote live survey #22081 verbatim, including the
+# policyholder's name, company, policy number and address. Scrub that before
+# ever un-ignoring them.
+*.md
+!README.md
+!LMS_INTEGRATION.md
+
+# Local dev-only mock backend (usage tracking) - never ship this
+dev-backend/
+
+# ── Secrets / local config ──────────────────────────────────────────
+.env
+.env.*
+*.pem
+*.key
+secrets.json
+
+# ── Packed builds ───────────────────────────────────────────────────
+# Chrome packaging output. The unpacked source is the deliverable.
+*.zip
+*.crx
+*.pem
+dist/
+build/
+
+# ── Tooling ─────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-error.log
+*.log
+
+# ── Editor / OS noise ───────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Agent scratch ───────────────────────────────────────────────────
+.claude/

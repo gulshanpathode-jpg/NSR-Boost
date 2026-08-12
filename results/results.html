@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NSR-Boost - Image Descriptions</title>
+  <script src="theme-init.js"></script>
+  <style>
+    :root { color-scheme: light; }
+    :root[data-theme="dark"] { color-scheme: dark; }
+    /* ═══════════════════════════════════════════════════════════════════
+       Design tokens - copied verbatim from sidepanel.css so the results
+       page reads as a continuation of the side panel, not a separate app.
+       ═══════════════════════════════════════════════════════════════════ */
+    :root {
+      /* ═══ SmartFill UI 2.0 — NSR (Indigo identity, matched to EZ) ═══ */
+      --bg:           #f4f5fb;
+      --card:         #ffffff;
+      --card-hover:   #fafbff;
+
+      --border:        #e5e7f2;
+      --border-strong: #d2d6e8;
+
+      --text:        #14162e;
+      --text-muted:  #5a6079;
+      --text-faint:  #989eb8;
+
+      --primary:        #4f46e5;
+      --primary-hover:  #4338ca;
+      --primary-soft:   #eef0fe;
+      --accent:         #818cf8;
+
+      --grad-a: #23215b;
+      --grad-b: #4338ca;
+      --grad-c: #6366f1;
+      --glow:   rgba(79, 70, 229, 0.32);
+
+      --success:       #10b981;
+      --success-soft:  #d9f7ec;
+      --warning:       #f59e0b;
+      --warning-soft:  #fdf0d2;
+      --danger:        #ef4444;
+      --danger-soft:   #fde3e3;
+
+      --shadow-sm: 0 1px 2px rgba(16, 29, 29, 0.05);
+      --shadow:    0 6px 18px rgba(16, 29, 29, 0.07);
+
+      --radius:    16px;
+      --radius-sm: 12px;
+
+      --font-sans: 'Segoe UI Variable Text', 'Segoe UI', -apple-system,
+                   BlinkMacSystemFont, 'Inter', Roboto, Helvetica, Arial, sans-serif;
+    }
+
+          :root[data-theme="dark"] {
+        --bg:           #0c0e1a;
+        --card:         #151829;
+        --card-hover:   #1a1e33;
+
+        --border:        #262b47;
+        --border-strong: #343b61;
+
+        --text:        #eceef8;
+        --text-muted:  #9aa1c0;
+        --text-faint:  #676e91;
+
+        --primary:       #8a84f5;
+        --primary-hover: #a5a0f8;
+        --primary-soft:  rgba(138, 132, 245, 0.14);
+        --accent:        #b3aefb;
+
+        --grad-a: #16143c;
+        --grad-b: #322da0;
+        --grad-c: #5a51ee;
+        --glow:   rgba(138, 132, 245, 0.35);
+
+        --success-soft: rgba(16, 185, 129, 0.15);
+        --warning-soft: rgba(245, 158, 11, 0.15);
+        --danger-soft:  rgba(239, 68, 68, 0.15);
+
+        --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+        --shadow:    0 6px 18px rgba(0, 0, 0, 0.45);
+      }
+
+    
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      font-family: var(--font-sans);
+      font-size: 14px;
+      color: var(--text);
+      background: var(--bg);
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    body { min-height: 100vh; }
+
+    button { font-family: inherit; cursor: pointer; border: 0; background: transparent; }
+    h1, h2, h3 { font-weight: 600; letter-spacing: -0.2px; }
+
+    /* ── Top bar (matches sidepanel.css .top-bar exactly) ────────── */
+    .top-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 24px;
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+      position: sticky; top: 0; z-index: 10;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .brand-icon {
+      width: 30px; height: 30px;
+      border-radius: 9px;
+      background: linear-gradient(135deg, var(--primary), #60a5fa);
+      color: #fff;
+      display: grid; place-items: center;
+      box-shadow: 0 2px 6px rgba(36, 102, 235, 0.28);
+    }
+    .brand h1 { font-size: 16px; font-weight: 700; letter-spacing: -0.3px; }
+
+    /* ── Page wrapper ─────────────────────────────────────────────── */
+    .page {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 20px 24px 40px;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+
+    /* ── Cards (verbatim from sidepanel .card) ────────────────────── */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-sm);
+    }
+
+    /* Detection-style header card - mirrors the side-panel "DETECTED PAGE"
+       card the user pointed to in the screenshot. */
+    .detection-card { padding: 16px; }
+    .detection-row {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      gap: 12px;
+    }
+    .detection-left { min-width: 0; flex: 1; }
+    .detection-label {
+      font-size: 10.5px;
+      letter-spacing: 1.3px;
+      text-transform: uppercase;
+      color: var(--text-faint);
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .detection-name {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.2px;
+    }
+    .detection-url {
+      font-size: 11.5px;
+      color: var(--text-faint);
+      margin-top: 6px;
+      font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+      word-break: break-all;
+    }
+
+    /* Badge pill - exact copy of sidepanel .badge.badge-success */
+    .badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 999px;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: 1.1px;
+      text-transform: uppercase;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .badge-success { background: var(--success-soft); color: #047857; }
+    .badge-danger  { background: var(--danger-soft);  color: #b91c1c; }
+    .badge-idle    { background: var(--bg); color: var(--text-muted); border: 1px solid var(--border); }
+
+    /* Survey-meta card (mirrors the side-panel .survey-meta-card) */
+    .survey-meta-card { padding: 12px 16px; }
+    .meta-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 6px 0;
+    }
+    .meta-row + .meta-row { border-top: 1px solid var(--border); }
+    .meta-label {
+      font-size: 10.5px;
+      letter-spacing: 1.3px;
+      text-transform: uppercase;
+      color: var(--text-faint);
+      font-weight: 700;
+      min-width: 70px;
+      flex-shrink: 0;
+    }
+    .meta-value {
+      font-size: 13.5px;
+      color: var(--text);
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* Stats pill row */
+    .stats-row { padding: 14px 16px; }
+    .stats-pills {
+      display: flex; gap: 8px; flex-wrap: wrap;
+    }
+    .stat-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 12px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1.0px;
+      text-transform: uppercase;
+    }
+    .stat-pill.total     { background: var(--primary-soft); color: var(--primary); }
+    .stat-pill.correct   { background: var(--success-soft); color: #047857; }
+    .stat-pill.incorrect { background: var(--danger-soft);  color: #b91c1c; }
+    .stat-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: 0.7;
+    }
+
+    /* ── Result grid + card ───────────────────────────────────────── */
+    /* min(320px, 100%) keeps the auto-fill columns from forcing a
+       horizontal scrollbar when the report window is narrower than 320px. */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
+      gap: 14px;
+    }
+
+    .result-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: var(--shadow-sm);
+      transition: border-color 150ms, transform 150ms, box-shadow 150ms;
+      animation: card-in 240ms ease-out both;
+      display: flex; flex-direction: column;
+    }
+    @keyframes card-in {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .result-card:hover {
+      border-color: var(--border-strong);
+      box-shadow: var(--shadow);
+      transform: translateY(-2px);
+    }
+
+    .card-image {
+      position: relative;
+      width: 100%;
+      height: 200px;
+      background: var(--bg);
+      overflow: hidden;
+      cursor: pointer;
+      border-bottom: 1px solid var(--border);
+    }
+    .card-image img {
+      width: 100%; height: 100%;
+      object-fit: cover;
+      display: block;
+      transition: transform 200ms;
+    }
+    .card-image:hover img { transform: scale(1.02); }
+
+    .order-badge {
+      position: absolute;
+      top: 10px; left: 10px;
+      padding: 4px 10px;
+      background: rgba(15, 23, 42, 0.78);
+      color: #fff;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.6px;
+      backdrop-filter: blur(4px);
+    }
+
+    .card-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 0; }
+
+    .label-row {
+      display: flex; align-items: baseline; gap: 10px;
+      padding: 6px 0;
+    }
+    .label-row + .label-row { border-top: 1px dashed var(--border); }
+    .label-tag {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      color: var(--text-faint);
+      font-weight: 700;
+      min-width: 60px;
+      flex-shrink: 0;
+    }
+    .label-value {
+      font-size: 13px;
+      color: var(--text);
+      font-weight: 500;
+      word-break: break-word;
+    }
+
+    .label-changed-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 0 4px;
+      border-top: 1px dashed var(--border);
+    }
+    .label-changed-row .badge {
+      padding: 3px 10px;
+      letter-spacing: 1.0px;
+    }
+
+    .description-box {
+      margin-top: 12px;
+      padding: 10px 12px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+    .desc-label {
+      font-size: 10px;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: var(--text-faint);
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .desc-text {
+      font-size: 12.5px;
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    .photo-id-text {
+      font-size: 10px;
+      color: var(--text-faint);
+      font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+      margin-top: 10px;
+      word-break: break-all;
+    }
+
+    /* ── Loading / empty states ──────────────────────────────────── */
+    .loading-container {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 80px 20px;
+      gap: 16px;
+    }
+    .loading-container .spinner {
+      width: 32px; height: 32px;
+      border: 3px solid var(--border);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-container p { color: var(--text-muted); font-size: 14px; }
+
+    .empty-state {
+      grid-column: 1 / -1;
+      display: flex; flex-direction: column; align-items: center;
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--text-muted);
+    }
+    .empty-icon {
+      width: 56px; height: 56px; border-radius: 50%;
+      background: var(--card);
+      border: 1px solid var(--border);
+      display: grid; place-items: center;
+      color: var(--text-faint);
+      margin-bottom: 14px;
+    }
+    .empty-state p { font-size: 15px; font-weight: 600; color: var(--text); }
+    .empty-state span { font-size: 12.5px; margin-top: 4px; }
+
+    /* ── Results toolbar (search / filter / sort) ─────────────────── */
+    .toolbar-card { padding: 12px 16px; position: sticky; top: 59px; z-index: 9; }
+    .toolbar-grid {
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    }
+    /* Search bar grows to fill; controls sit on the right and wrap below
+       on narrow widths so nothing ever crowds. */
+    .tb-search {
+      position: relative;
+      flex: 1 1 240px;
+      min-width: 200px;
+      display: flex; align-items: center;
+    }
+    .tb-search .search-icon {
+      position: absolute; left: 12px;
+      color: var(--text-faint);
+      pointer-events: none;
+    }
+    .tb-search input {
+      width: 100%;
+      font-family: inherit;
+      font-size: 13.5px;
+      color: var(--text);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 9px 34px 9px 34px;
+      outline: none;
+      transition: border-color 140ms, box-shadow 140ms;
+    }
+    .tb-search input:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(36, 102, 235, 0.12);
+      background: var(--card);
+    }
+    .tb-search input::placeholder { color: var(--text-faint); }
+    .tb-clear {
+      position: absolute; right: 8px;
+      width: 20px; height: 20px;
+      display: none; place-items: center;
+      border-radius: 50%;
+      color: var(--text-faint);
+      line-height: 1;
+    }
+    .tb-clear:hover { background: var(--border); color: var(--text); }
+    .tb-clear.is-visible { display: grid; }
+
+    /* Segmented filter control - mirrors the side panel's sort-buttons. */
+    .tb-segment {
+      display: inline-flex;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 3px;
+      gap: 2px;
+    }
+    .tb-seg-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 12px;
+      border-radius: 7px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      letter-spacing: 0.2px;
+      transition: background 140ms, color 140ms;
+      white-space: nowrap;
+    }
+    .tb-seg-btn:hover { color: var(--text); }
+    .tb-seg-btn.is-active {
+      background: var(--card);
+      color: var(--text);
+      box-shadow: var(--shadow-sm);
+    }
+    .tb-seg-btn .seg-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .tb-seg-btn .seg-dot.correct   { background: var(--success); }
+    .tb-seg-btn .seg-dot.changed   { background: var(--danger); }
+    .tb-seg-count {
+      font-size: 10.5px;
+      font-weight: 700;
+      color: var(--text-faint);
+      background: var(--card);
+      border-radius: 999px;
+      padding: 1px 6px;
+      min-width: 18px;
+      text-align: center;
+    }
+    .tb-seg-btn.is-active .tb-seg-count { color: var(--primary); }
+
+    /* Sort select */
+    .tb-sort { display: inline-flex; align-items: center; gap: 8px; }
+    .tb-sort label {
+      font-size: 10.5px;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: var(--text-faint);
+      font-weight: 700;
+    }
+    .tb-sort select {
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 8px 30px 8px 12px;
+      outline: none;
+      cursor: pointer;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235b667a' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      transition: border-color 140ms, box-shadow 140ms;
+    }
+    .tb-sort select:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(36, 102, 235, 0.12);
+    }
+
+    /* "Showing X of Y" count line under the toolbar */
+    .results-meta {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-weight: 500;
+      padding: 2px 2px 0;
+    }
+    .results-meta strong { color: var(--text); font-weight: 700; }
+
+    /* Search-term highlight inside labels / descriptions */
+    mark.hl {
+      background: var(--warning-soft);
+      color: #92400e;
+      border-radius: 3px;
+      padding: 0 1px;
+    }
+
+    /* ── Image lightbox (opens in-page, not a new tab) ───────────── */
+    .lightbox {
+      position: fixed; inset: 0; z-index: 100;
+      display: none;
+      align-items: center; justify-content: center;
+      background: rgba(15, 23, 42, 0.82);
+      backdrop-filter: blur(2px);
+      -webkit-backdrop-filter: blur(2px);
+      animation: lb-fade 0.12s ease-out;
+    }
+    .lightbox.is-open { display: flex; }
+    @keyframes lb-fade { from { opacity: 0; } to { opacity: 1; } }
+
+    .lightbox-stage {
+      position: relative;
+      width: 92vw; height: 88vh;
+      display: flex; align-items: center; justify-content: center;
+      overflow: hidden;
+      cursor: grab;
+    }
+    .lightbox-stage.is-dragging { cursor: grabbing; }
+    .lightbox-img {
+      max-width: 92vw; max-height: 88vh;
+      object-fit: contain;
+      user-select: none; -webkit-user-drag: none;
+      transform-origin: center center;
+      transition: transform 0.05s linear;
+      will-change: transform;
+      box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+      background: #fff;
+      border-radius: 4px;
+    }
+    .lightbox-toolbar {
+      position: fixed; top: 16px; right: 16px; z-index: 3;
+      display: flex; align-items: center; gap: 6px;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 10px; padding: 6px;
+    }
+    .lightbox-btn {
+      appearance: none; border: 0; cursor: pointer;
+      width: 34px; height: 34px; border-radius: 7px;
+      background: rgba(255, 255, 255, 0.10); color: #f8fafc;
+      font-size: 20px; line-height: 1; font-weight: 600;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.1s ease;
+    }
+    .lightbox-btn:hover { background: rgba(255, 255, 255, 0.22); }
+    .lightbox-zoomlabel {
+      min-width: 48px; text-align: center; color: #e2e8f0;
+      font-size: 12px; font-variant-numeric: tabular-nums;
+      padding: 0 4px; user-select: none;
+    }
+    .lightbox-hint {
+      position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 3;
+      color: rgba(226, 232, 240, 0.78); font-size: 12px;
+      background: rgba(15, 23, 42, 0.7); padding: 5px 12px; border-radius: 999px;
+      user-select: none; pointer-events: none;
+    }
+
+    /* ── Scrollbar polish ────────────────────────────────────────── */
+    body::-webkit-scrollbar { width: 10px; }
+    body::-webkit-scrollbar-thumb {
+      background: var(--border-strong);
+      border-radius: 999px;
+    }
+    body::-webkit-scrollbar-track { background: transparent; }
+
+    /* ═════════════════════════════════════════════════════════════════
+       SMARTFILL UI 2.0 — modern theme layer (mirrors the side panel).
+       ═════════════════════════════════════════════════════════════════ */
+    body {
+      background:
+        radial-gradient(1200px 420px at 108% -8%, var(--primary-soft) 0%, transparent 60%),
+        radial-gradient(900px 380px at -12% 20%, var(--primary-soft) 0%, transparent 55%),
+        var(--bg);
+      background-attachment: fixed;
+    }
+    ::selection { background: var(--primary); color: #fff; }
+    :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+    .top-bar {
+      position: sticky;
+      overflow: hidden;
+      border-bottom: 0;
+      background: linear-gradient(118deg, var(--grad-a) 0%, var(--grad-b) 58%, var(--grad-c) 100%);
+    }
+    .top-bar::before {
+      content: '';
+      position: absolute; inset: 0;
+      background:
+        radial-gradient(480px 90px at 14% 0%, rgba(255, 255, 255, 0.16), transparent 70%),
+        radial-gradient(640px 140px at 92% 130%, rgba(255, 255, 255, 0.10), transparent 70%);
+      pointer-events: none;
+    }
+    .top-bar::after {
+      content: '';
+      position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      background-size: 220% 100%;
+      animation: hairline-drift 6s linear infinite;
+      opacity: 0.9;
+    }
+    @keyframes hairline-drift {
+      from { background-position: 130% 0; }
+      to   { background-position: -130% 0; }
+    }
+    .brand { position: relative; z-index: 1; }
+    .brand h1 { color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.18); }
+    .brand-icon {
+      background: rgba(255, 255, 255, 0.14);
+      color: #fff;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28), 0 2px 8px rgba(0, 0, 0, 0.18);
+      backdrop-filter: blur(4px);
+    }
+
+    /* Brand-tinted focus states (were hard-coded blue). */
+    .tb-search input:focus,
+    .tb-sort select:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px var(--primary-soft);
+    }
+    .tb-seg-btn.is-active { color: var(--primary); }
+    .loading-container .spinner { border-top-color: var(--primary); }
+
+    /* Dark-mode fixes for values hard-coded against light surfaces. */
+          :root[data-theme="dark"] .badge-success { color: #34d399; }
+
+      :root[data-theme="dark"] .badge-danger { color: #f87171; }
+
+      :root[data-theme="dark"] .stat-pill.correct { color: #34d399; }
+
+      :root[data-theme="dark"] .stat-pill.incorrect { color: #f87171; }
+
+      :root[data-theme="dark"] mark.hl { color: #fbbf24; }
+
+      :root[data-theme="dark"] .lightbox-img { background: #14201f; }
+
+    
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ═════════ TOP BAR ═════════ -->
+  <header class="top-bar">
+    <div class="brand">
+      <span class="brand-icon" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 1 1-3-6.7"/>
+          <polyline points="21 4 21 10 15 10"/>
+        </svg>
+      </span>
+      <h1>Smart&nbsp;Fill</h1>
+    </div>
+  </header>
+
+  <!-- ═════════ LOADING ═════════ -->
+  <div id="loadingState" class="loading-container">
+    <div class="spinner"></div>
+    <p>Waiting for results data…</p>
+  </div>
+
+  <!-- ═════════ RESULTS ═════════ -->
+  <div id="resultsContainer" class="page" style="display: none;">
+
+    <!-- Detection-style header (matches the side panel's DETECTED PAGE card) -->
+    <div class="card detection-card">
+      <div class="detection-row">
+        <div class="detection-left">
+          <div class="detection-label">Image Description Results</div>
+          <div class="detection-name" id="rResultsHeading">Order Photos - AI Verification</div>
+          <div class="detection-url" id="rResultsCount">-</div>
+        </div>
+        <span id="rOverallBadge" class="badge badge-success">VERIFIED</span>
+      </div>
+    </div>
+
+    <!-- Survey metadata card -->
+    <div class="card survey-meta-card">
+      <div class="meta-row">
+        <span class="meta-label">Survey</span>
+        <span id="rSurvey" class="meta-value">-</span>
+      </div>
+      <div class="meta-row">
+        <span class="meta-label">Insured</span>
+        <span id="rInsured" class="meta-value">-</span>
+      </div>
+      <div class="meta-row">
+        <span class="meta-label">Policy</span>
+        <span id="rPolicy" class="meta-value">-</span>
+      </div>
+    </div>
+
+    <!-- Stats pills -->
+    <div class="card stats-row">
+      <div class="stats-pills">
+        <span id="statTotal"     class="stat-pill total"><span class="stat-dot"></span><span id="statTotalText"></span></span>
+        <span id="statCorrect"   class="stat-pill correct"><span class="stat-dot"></span><span id="statCorrectText"></span></span>
+        <span id="statIncorrect" class="stat-pill incorrect"><span class="stat-dot"></span><span id="statIncorrectText"></span></span>
+      </div>
+    </div>
+
+    <!-- Toolbar: search / filter / sort -->
+    <div class="card toolbar-card" id="resultsToolbar">
+      <div class="toolbar-grid">
+        <!-- Search -->
+        <div class="tb-search">
+          <svg class="search-icon" width="15" height="15" viewBox="0 0 24 24"
+               fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="8"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input type="text" id="tbSearch" autocomplete="off" spellcheck="false"
+                 placeholder="Search labels &amp; descriptions…"
+                 aria-label="Search results" />
+          <button class="tb-clear" id="tbClear" title="Clear search" aria-label="Clear search">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2.4"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Filter segmented control -->
+        <div class="tb-segment" id="tbFilter" role="tablist" aria-label="Filter by status">
+          <button class="tb-seg-btn is-active" data-filter="all" role="tab" aria-selected="true">
+            <span>All</span>
+            <span class="tb-seg-count" id="segCountAll">0</span>
+          </button>
+          <button class="tb-seg-btn" data-filter="correct" role="tab" aria-selected="false">
+            <span class="seg-dot correct"></span>
+            <span>Correct</span>
+            <span class="tb-seg-count" id="segCountCorrect">0</span>
+          </button>
+          <button class="tb-seg-btn" data-filter="changed" role="tab" aria-selected="false">
+            <span class="seg-dot changed"></span>
+            <span>Changed</span>
+            <span class="tb-seg-count" id="segCountChanged">0</span>
+          </button>
+        </div>
+
+        <!-- Sort -->
+        <div class="tb-sort">
+          <label for="tbSort">Sort</label>
+          <select id="tbSort">
+            <option value="order">Page order</option>
+            <option value="changed">Changed first</option>
+            <option value="label-asc">Label A-Z</option>
+            <option value="label-desc">Label Z-A</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Showing X of Y -->
+    <div class="results-meta" id="resultsMeta"></div>
+
+    <!-- Result grid -->
+    <div id="resultsGrid" class="grid"></div>
+  </div>
+
+  <!-- ═════════ IMAGE LIGHTBOX (in-page) ═════════ -->
+  <div id="lightbox" class="lightbox" role="dialog" aria-modal="true" aria-label="Full resolution image">
+    <div class="lightbox-toolbar">
+      <button class="lightbox-btn" id="lightboxZoomOut" title="Zoom out (-)" aria-label="Zoom out">&minus;</button>
+      <span class="lightbox-zoomlabel" id="lightboxZoomLabel">100%</span>
+      <button class="lightbox-btn" id="lightboxZoomIn" title="Zoom in (+)" aria-label="Zoom in">+</button>
+      <button class="lightbox-btn" id="lightboxReset" title="Fit to screen (0)" aria-label="Fit to screen">⤢</button>
+      <button class="lightbox-btn" id="lightboxClose" title="Close (Esc)" aria-label="Close">&times;</button>
+    </div>
+    <div class="lightbox-stage" id="lightboxStage">
+      <img class="lightbox-img" id="lightboxImg" alt="Full resolution photo" draggable="false" />
+    </div>
+    <div class="lightbox-hint">Scroll to zoom · drag to pan · Esc to close</div>
+  </div>
+
+  <script src="results.js"></script>
+</body>
+</html>
