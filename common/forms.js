@@ -30,10 +30,11 @@
   // That makes it available on every form page rather than only on General
   // Information (see page/dynforms-agent.js → surveyType()).
   //
-  // The analysis survey reports "Rec Management_Test_1", which is a test
-  // value - the real production strings still need confirming. Until then the
-  // survey-type filter in matchForm() is advisory: an unknown type does not
-  // block a title + section-signature match.
+  // Confirmed live on survey 22035: the engine reports "WKFC Property Standard"
+  // verbatim on both WKFC Cover and WKFC: Core Revised, and the General
+  // Information grid's "Survey Type" row carries the identical string. The
+  // filter in matchForm() is therefore a hard gate, not advisory - see
+  // isSupportedSurveyType().
   const SURVEY_TYPES = {
     WKFC: 'WKFC Property Standard',
   };
@@ -78,16 +79,37 @@
       kind: 'form_text_dict',
       surveyTypes: [SURVEY_TYPES.WKFC],
       sectionSignature: ['Survey Information', 'General Information'],
+      // The NSR_LMS cover contract, unchanged: these five and nothing else.
+      //
+      // toTextDict() emits only the entries it actually finds on the page, so a
+      // label absent from this survey's cover is left out of the payload
+      // entirely rather than sent empty. On BoostUSA today that means exactly
+      // one key ships - "Underwriter concerns / Inspection comments" - because
+      // the other four narratives do not exist on this cover. They stay listed
+      // so they flow through automatically on any tenant or future cover
+      // revision that does carry them.
+      //
+      // The BoostUSA-specific narratives (Areas Reviewed, Opinion of Risk,
+      // Comment) were deliberately REMOVED: they are real content on this
+      // cover, but they are not part of the /knowledge cover contract and the
+      // backend was never asked for them. Re-add them here if that changes.
       fields: [
-        'Areas Reviewed',
+        'Construction',
+        'Common / Special Hazards',
+        'Protection',
+        'Review Of Operations / Occupancy',
         'Underwriter concerns / Inspection comments',
-        'Opinion of Risk',
-        'Comment',
       ],
       // "Describe" appears twice on this form (once under "Were any critical
       // issues observed?", once under "Past losses learned of?"), so a flat
-      // {label: value} dict would silently drop one. Keys collide → qualify
-      // with the section/sub-section. See qualifyKey() in content/content.js.
+      // {label: value} dict would silently drop one. Colliding keys are
+      // qualified with their sub-section - see toTextDict() in
+      // content/content.js.
+      //
+      // Inert with the whitelist above, since "Describe" is not in it; kept so
+      // a future whitelisted label that does repeat cannot overwrite itself.
+      // Note the qualification needs `subheader`, which extract() reports as ''
+      // on this form - a real collision would fall back to the plain key.
       hasDuplicateLabels: true,
     },
 
@@ -108,7 +130,31 @@
       // restriction as the forms - otherwise a non-WKFC survey's GI page would
       // still be treated as supported.
       surveyTypes: [SURVEY_TYPES.WKFC],
-      genericFields: ['Address to be Surveyed'],
+      // The full NSR_LMS WKFC knowledge-base whitelist. All eleven generic
+      // fields exist on BoostUSA, in the "Extra Info" panel (#genFieldSection)
+      // rather than the survey grid - see readPairs() in
+      // content/generalinfo.js, which walks both.
+      //
+      // Labels are identical to NSR's apart from the address row, which
+      // BoostUSA calls "Address to be Surveyed"; BACKEND_KEYS maps it to the
+      // unchanged backend key "Address".
+      //
+      // Fields absent from a given survey are simply omitted from the payload
+      // (extractFields skips a miss) rather than sent empty.
+      genericFields: [
+        'ConstructionType',
+        'NumberStories',
+        'NumberOfBuildings',
+        'RoofType',
+        'Roofing',
+        'Sprinklers',
+        'YearBuilt',
+        'Plumbing',
+        'Wiring',
+        'Heating',
+        'Occupancy',
+        'Address to be Surveyed',
+      ],
     },
   ];
 
@@ -227,6 +273,35 @@
     };
   }
 
+  /**
+   * Stable identity for a BoostUSA page, for "is this still the page the
+   * operation started on?" checks.
+   *
+   * A raw URL string is not usable for that. The SPA rewrites the address bar,
+   * `contextID` changes between visits to the same form, and query parameters
+   * are not emitted in a stable order - so `urlA === urlB` reports "different
+   * page" for two views of the very same form. What actually identifies a page
+   * is the origin, the path, and `inspectionFormID` (the form open in it).
+   *
+   * Unparseable input is returned trimmed, so a bad URL only ever matches
+   * itself.
+   */
+  function pageKeyOf(url) {
+    try {
+      const u = new URL(String(url));
+      const formId = (u.searchParams.get('inspectionFormID') || '').toLowerCase();
+      return `${u.origin}${u.pathname.replace(/\/+$/, '')}${formId ? `#${formId}` : ''}`;
+    } catch (_) {
+      return String(url == null ? '' : url).trim();
+    }
+  }
+
+  /** Do two URLs point at the same BoostUSA page? Empty input never matches. */
+  function samePage(a, b) {
+    if (!a || !b) return false;
+    return pageKeyOf(a) === pageKeyOf(b);
+  }
+
   const api = {
     SURVEY_TYPES,
     SUPPORTED_FORMS,
@@ -236,6 +311,8 @@
     isSupportedSurveyType,
     normalize,
     capabilitiesForUrl,
+    pageKeyOf,
+    samePage,
   };
 
   if (typeof window !== 'undefined') window.NSR_FORMS = api;

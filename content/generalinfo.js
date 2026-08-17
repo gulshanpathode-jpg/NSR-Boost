@@ -78,19 +78,50 @@
         && !document.querySelector('.dyn-mainform');
   }
 
-  /** All label → value pairs on the page. Later duplicates do not clobber earlier. */
+  /**
+   * All label → value pairs on the page. Later duplicates do not clobber
+   * earlier, so the survey grid wins over Extra Info on any shared label.
+   *
+   * Two grids, read in order:
+   *
+   *   .ri.ri-l  → .ri            the survey detail grid (109 rows): policy,
+   *                              survey number, address, dates, agency…
+   *   #genFieldSection
+   *   .genFieldR.genFieldR-l
+   *             → .genFieldR     the "Extra Info" panel (31 rows). Same
+   *                              label/value-sibling shape, different classes.
+   *
+   * The Extra Info panel is where BoostUSA keeps the generic fields NSR served
+   * from its Generic Fields table - ConstructionType, YearBuilt, Wiring and the
+   * rest of the knowledge-base whitelist. Reading only `.ri.ri-l` missed all of
+   * them, which is why the GI payload used to carry Address alone.
+   */
   function readPairs() {
     const out = {};
+
+    const add = (label, valueEl) => {
+      if (!label || !valueEl) return;
+      if (Object.prototype.hasOwnProperty.call(out, label)) return;
+      out[label] = readValue(valueEl);
+    };
+
     document.querySelectorAll('.ri.ri-l').forEach((labelEl) => {
       const valueEl = labelEl.nextElementSibling;
       if (!valueEl || !valueEl.classList.contains('ri')) return;
-
-      const label = clean(labelEl.textContent);
-      if (!label) return;
-      if (Object.prototype.hasOwnProperty.call(out, label)) return;
-
-      out[label] = readValue(valueEl);
+      add(clean(labelEl.textContent), valueEl);
     });
+
+    // Extra Info. `.bg-primary.section-header` divs ("Preferred", "Boost",
+    // "SmartFill") sit between rows, so scan forward for the value rather than
+    // trusting nextElementSibling - and stop at the next label so a field with
+    // no value cell can't borrow the following row's value.
+    document.querySelectorAll('#genFieldSection .genFieldR.genFieldR-l').forEach((labelEl) => {
+      let el = labelEl.nextElementSibling;
+      while (el && !el.classList.contains('genFieldR')) el = el.nextElementSibling;
+      if (!el || el.classList.contains('genFieldR-l')) return;
+      add(clean(labelEl.textContent), el);
+    });
+
     return out;
   }
 

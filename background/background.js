@@ -113,6 +113,47 @@ async function injectContentScripts(tabId, url) {
 }
 
 /**
+ * Resolve which tab a side-panel request should act on.
+ *
+ * Callers pin the LC360 tab with `targetTabId` (and, where the request belongs
+ * to a specific page rather than just a specific tab, `targetPageKey`). Both
+ * matter, and for different reasons:
+ *
+ *   targetTabId    the user is free to tab away mid-run - to check email while
+ *                  50 images upload, or just to look something up. Without a
+ *                  pin the request lands on whichever tab happens to be focused
+ *                  when the worker gets to it. For a read that fails loudly;
+ *                  for APPLY_ANSWER it writes a value into the wrong form.
+ *
+ *   targetPageKey  the pinned tab may still be the right tab but the wrong
+ *                  page - BoostUSA is an SPA and the user can navigate it to
+ *                  another form without the tab id changing. A different
+ *                  survey's values are worse than none, so we refuse.
+ *
+ * Falling back to the active tab is deliberate and still supported: some
+ * requests (DETECT_PAGE from the broadcast path) genuinely mean "whatever is in
+ * front of me right now". Those simply send no pin.
+ */
+async function resolveTargetTab(msg) {
+  if (typeof msg.targetTabId !== 'number') {
+    const active = await getActiveTab();
+    if (!active?.id) throw new Error('No active tab');
+    return active;
+  }
+
+  const tab = await chrome.tabs.get(msg.targetTabId).catch(() => null);
+  if (!tab) {
+    throw new Error('The BoostUSA tab this action belongs to is no longer open.');
+  }
+  if (msg.targetPageKey && !self.NSR_FORMS.samePage(tab.url, msg.targetPageKey)) {
+    throw new Error(
+      'That tab has navigated to a different page. Go back to the original form, or re-run from the page you are on.'
+    );
+  }
+  return tab;
+}
+
+/**
  * Send a message to a tab's content script, injecting first if needed.
  * Only attempts injection on LossControl360 URLs.
  */
@@ -412,7 +453,10 @@ async function scrapeForGroundTruth(draft) {
     const tab = await chrome.tabs.get(draft.tabId).catch(() => null);
     if (!tab || !tab.url) return null;
     // Same page? A different survey's values would be worse than none.
-    if (draft.pageKey && tab.url !== draft.pageKey) return null;
+    // Compared on the normalised page key, not the raw URL - the SPA rewrites
+    // the address bar and contextID changes between visits, so a string compare
+    // reports "different page" for two views of the same form.
+    if (draft.pageKey && !self.NSR_FORMS.samePage(tab.url, draft.pageKey)) return null;
 
     const scraped = await sendToTab(tab.id, tab.url, { action: 'SCRAPE' });
     if (!scraped?.success || !Array.isArray(scraped.items)) return null;
@@ -495,8 +539,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.action === 'SCRAPE_AND_VERIFY') {
     (async () => {
       try {
-        const tab = await getActiveTab();
-        if (!tab?.id) throw new Error('No active tab');
+        // Pinned by the side panel to the tab the button was pressed on. This
+        // used to be a bare getActiveTab(), which resolves to whatever is
+        // focused when the worker gets here - and on an MV3 cold start that can
+        // be hundreds of ms after the click. Losing that race did not fail
+        // safely: DETECT_FORM ran on the wrong tab too, so the *flow* was
+        // chosen from the wrong form and "Save to SmartFill" on a Cover page
+        // could execute a 344-question /verify-direct instead.
+        const tab = await resolveTargetTab(msg);
 
         const detection = await sendToTab(tab.id, tab.url, { action: 'DETECT_FORM' });
         if (!detection?.supported) {
@@ -724,17 +774,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (PASS_THROUGH.includes(msg.action)) {
     (async () => {
       try {
-        // If the caller pinned a target tab (image fetch loops do this so
-        // they don't break when the user switches tabs mid-run), use it.
-        // Otherwise fall back to whichever tab is active right now.
-        let tab;
-        if (typeof msg.targetTabId === 'number') {
-          tab = await chrome.tabs.get(msg.targetTabId).catch(() => null);
-          if (!tab) throw new Error(`Pinned tab ${msg.targetTabId} no longer exists`);
-        } else {
-          tab = await getActiveTab();
-          if (!tab?.id) throw new Error('No active tab');
-        }
+        const tab = await resolveTargetTab(msg);
         const result = await sendToTab(tab.id, tab.url, msg);
         sendResponse(result);
       } catch (err) {

@@ -76,11 +76,20 @@
       return { supported: false, reason: 'No form is open on this page', context: ctx };
     }
 
-    // Survey type comes off the engine (ctx.surveyType) - the BoostUSA
-    // equivalent of NSR's Utilant.CaseTypeName - so it is available on every
-    // form page, not just General Information. The DOM scrape is only a
-    // fallback for pages the engine hasn't populated.
-    const surveyType = ctx.surveyType || surveyTypeFromDom();
+    // On a form page the survey type is read from the engine and ONLY from the
+    // engine:
+    //
+    //   LC360Forms.getLoadedFormInstance()
+    //     .engine.formInfo.inspectionInfo.inspectionType
+    //
+    // (page/dynforms-agent.js → surveyType()). That value is authoritative and
+    // verified to read "WKFC Property Standard" verbatim on both WKFC Cover and
+    // WKFC: Core Revised, so a form whose engine reports anything else - or
+    // reports nothing - is not supported. There is deliberately no DOM fallback
+    // here: it would let page markup stand in for the engine and weaken the
+    // gate. General Information keeps its own DOM read above, because that page
+    // carries no engine at all (getLoadedFormInstance() throws there).
+    const surveyType = ctx.surveyType || '';
     const match = FORMS.matchForm(ctx.formTitle, ctx.mainSections, surveyType);
 
     if (!match) {

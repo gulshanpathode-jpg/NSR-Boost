@@ -283,14 +283,14 @@ function buildPhotoHandlerUrl(caseId, photoId, size) {
  *
  * The modal is rendered by content/imageModal.js running on the LC360 page,
  * because that page is same-origin with photoHandler and carries the session
- * cookies the image needs. We dispatch to the currently active tab (same as
- * the form Accept/Reject actions). If that tab isn't the LC360 page, the
- * content script is unreachable and we surface a "wrong page" note.
+ * cookies the image needs. Pinned to the detected LC360 page; if that tab has
+ * closed or navigated away the content script is unreachable and we surface a
+ * "wrong page" note.
  */
 function openImageOnPage(images, index = 0) {
   const gallery = Array.isArray(images) ? images.filter(Boolean) : (images ? [images] : []);
   if (!gallery.length) return;
-  chrome.runtime.sendMessage(
+  sendToPage(
     { action: 'SHOW_IMAGE_MODAL', images: gallery, index },
     (resp) => {
       if (chrome.runtime.lastError || !resp || !resp.ok) {
@@ -559,21 +559,39 @@ function renderSurveyType(d) {
   els.detectionSurveyTypeBlk.style.display = 'block';
 }
 
+/**
+ * Is a Sync run in flight?
+ *
+ * Detection re-renders on every tab switch and SPA navigation, and it used to
+ * reset the Sync button and status badge unconditionally. Switching to another
+ * BoostUSA tab mid-run therefore re-enabled the button and showed READY while
+ * the run was still going - and a second click started a concurrent pipeline
+ * that clobbered state.entries and state.resultId.
+ */
+function isPipelineBusy() {
+  return state.pipeline === 'scraping'
+    || state.pipeline === 'uploading'
+    || state.pipeline === 'analyzing';
+}
+
 function renderFormDetection(d) {
   const f = d.form;
   els.detectionLabel.textContent = 'Detected Form';
+  const busy = isPipelineBusy();
 
   if (f?.supported) {
     els.detectionName.textContent = f.form.name;
     els.detectionBadge.textContent = 'SUPPORTED';
     els.detectionBadge.className = 'badge badge-success';
     els.warningCard.style.display = 'none';
-    els.btnSync.disabled = false;
-    setStatusBadge('READY', 'idle');
-    // Button label + ready copy depend on which backend flow this form uses.
-    // verify         → "Sync & Verify with AI" (Core Revised, unchanged)
-    // knowledge_base → "Save to SmartFill" (Cover, General Information)
-    setSyncButtonForFlow(f.form.flow || 'verify');
+    if (!busy) {
+      els.btnSync.disabled = false;
+      setStatusBadge('READY', 'idle');
+      // Button label + ready copy depend on which backend flow this form uses.
+      // verify         → "Sync & Verify with AI" (Core Revised, unchanged)
+      // knowledge_base → "Save to SmartFill" (Cover, General Information)
+      setSyncButtonForFlow(f.form.flow || 'verify');
+    }
   } else {
     els.detectionName.textContent = 'Unsupported page';
     els.detectionBadge.textContent = 'NOT SUPPORTED';
@@ -598,11 +616,16 @@ function renderFormDetection(d) {
       body = `The current tab is not a recognized NSR form page (${f?.reason || 'unknown'})${ctSuffix}.`;
     }
     els.warningBody.textContent = body;
+    // Disabling is always safe - it is the direction that prevents a second
+    // concurrent run. The badge and label are not: overwriting them mid-run
+    // replaces "IN PROGRESS" with "UNSUPPORTED" for a run that is still going.
     els.btnSync.disabled = true;
-    setStatusBadge('UNSUPPORTED', 'warning');
-    els.statusDesc.textContent = STATUS_DESCRIPTIONS.unsupported;
-    // Reset to default verify label so the next supported page starts clean.
-    setSyncButtonForFlow('verify');
+    if (!busy) {
+      setStatusBadge('UNSUPPORTED', 'warning');
+      els.statusDesc.textContent = STATUS_DESCRIPTIONS.unsupported;
+      // Reset to default verify label so the next supported page starts clean.
+      setSyncButtonForFlow('verify');
+    }
   }
 
   renderSurveyType(d);
@@ -712,13 +735,18 @@ function renderSupportedList(detection) {
     (detection && detection.form && detection.form.detectedHeader) || '';
   const detectedHeaderLc = detectedHeader.replace(/\s+/g, ' ').trim().toLowerCase();
 
-  // Group the registry by case type. A form with no `caseTypes` array is
+  // Group the registry by survey type. A form with no `surveyTypes` array is
   // universal; we label it "Any case type".
-  const groups = new Map(); // caseTypeLabel -> [forms]
+  //
+  // NOTE: the registry key is `surveyTypes` on BoostUSA, not NSR_LMS's
+  // `caseTypes`. Reading the old key here made every entry look universal, so
+  // the whole list rendered under "Any case type" instead of
+  // "WKFC Property Standard".
+  const groups = new Map(); // surveyTypeLabel -> [forms]
   const UNIVERSAL = 'Any case type';
   FORMS.SUPPORTED_FORMS.forEach((form) => {
-    const cts = Array.isArray(form.caseTypes) && form.caseTypes.length
-      ? form.caseTypes
+    const cts = Array.isArray(form.surveyTypes) && form.surveyTypes.length
+      ? form.surveyTypes
       : [UNIVERSAL];
     cts.forEach((ct) => {
       if (!groups.has(ct)) groups.set(ct, []);
@@ -810,6 +838,64 @@ function requestDetection() {
   chrome.runtime.sendMessage({ action: 'REQUEST_DETECTION' }).catch(() => { });
 }
 
+// ── Talking to the LC360 page ────────────────────────────────────────
+//
+// Every request that acts on the page must say WHICH page. The side panel
+// outlives tab switches and SPA navigations, so "the active tab" is not a
+// stable answer - the user is free to tab away mid-run, and BoostUSA can
+// navigate a pinned tab to a different form without the tab id changing.
+//
+// Two senders, because there are two different notions of "the page":
+//
+//   sendToPage()     the page the panel is currently showing. For actions the
+//                    user initiates against what is in front of them - photo
+//                    extraction, restore, focus.
+//
+//   sendToRunPage()  the page the active review belongs to. For actions that
+//                    act on a specific run's questions - apply, revert, focus,
+//                    ground-truth re-scrape. These must not follow the user to
+//                    another tab: applying an answer to the wrong form writes
+//                    a real value into a real survey.
+//
+// Both stamp `targetTabId` and `targetPageKey`; the worker refuses a tab that
+// has closed or navigated (see resolveTargetTab in background/background.js).
+
+/**
+ * Same-page test, tolerant of the registry not being loaded. forms.js is
+ * included before this file so the fallback should never fire, but the panel
+ * stays functional if it ever does - matching renderSupportedList's guard.
+ */
+function isSamePage(a, b) {
+  if (window.NSR_FORMS && typeof window.NSR_FORMS.samePage === 'function') {
+    return window.NSR_FORMS.samePage(a, b);
+  }
+  return !!a && !!b && a === b;
+}
+
+/** Stamp the pin fields onto a message and send it. */
+function sendPinned(msg, tabId, pageKey, callback) {
+  const out = { ...msg };
+  if (typeof tabId === 'number') out.targetTabId = tabId;
+  if (pageKey) out.targetPageKey = pageKey;
+  return chrome.runtime.sendMessage(out, callback);
+}
+
+/** Send to the page the panel is currently showing. */
+function sendToPage(msg, callback) {
+  return sendPinned(msg, state.detection?.tabId, state.detection?.url || '', callback);
+}
+
+/**
+ * Send to the page the current review belongs to, falling back to the
+ * displayed page when no run has happened yet.
+ */
+function sendToRunPage(msg, callback) {
+  const hasRun = typeof state.pipelineTabId === 'number';
+  return hasRun
+    ? sendPinned(msg, state.pipelineTabId, state.pipelinePageKey || '', callback)
+    : sendToPage(msg, callback);
+}
+
 // ═════════════════════════════════════════════════════════════════════
 // 7. Message bus
 // ═════════════════════════════════════════════════════════════════════
@@ -818,7 +904,11 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.action === 'PAGE_DETECTED') {
     const newUrl = msg.url || '';
     const hasOutput = !!state.pipelinePageKey;
-    const onOwnerPage = hasOutput && newUrl === state.pipelinePageKey;
+    // Compared on the normalised page key rather than the raw URL: the SPA
+    // rewrites the address bar and contextID differs between visits, so a
+    // string compare called two views of the same form "different pages" and
+    // the stored review queue never came back.
+    const onOwnerPage = hasOutput && isSamePage(newUrl, state.pipelinePageKey);
 
     // Leaving the page that owns the current verify/KB output: blank the
     // display so a result/error from page A doesn't bleed onto page B - but
@@ -904,11 +994,19 @@ function startPipeline() {
   state.apiStartMs = Date.now();
   logActivity('Sync started');
 
-  chrome.runtime.sendMessage({ action: 'SCRAPE_AND_VERIFY' }, (resp) => {
-    if (chrome.runtime.lastError) return handlePipelineError(chrome.runtime.lastError.message);
-    if (!resp?.success) return handlePipelineError(resp?.error || 'Unknown error');
-    handlePipelineSuccess(resp);
-  });
+  // Pinned to the tab the button was pressed on. Without this the worker
+  // resolved the target with getActiveTab(), which on an MV3 cold start can
+  // run long after the click - and the user may have tabbed away by then.
+  sendPinned(
+    { action: 'SCRAPE_AND_VERIFY' },
+    state.pipelineTabId,
+    state.pipelinePageKey,
+    (resp) => {
+      if (chrome.runtime.lastError) return handlePipelineError(chrome.runtime.lastError.message);
+      if (!resp?.success) return handlePipelineError(resp?.error || 'Unknown error');
+      handlePipelineSuccess(resp);
+    }
+  );
 }
 
 function handleProgress(msg) {
@@ -1907,6 +2005,10 @@ function prefetchReferenceImages() {
   });
   if (!urls.length) return;
 
+  // Tab-pinned but deliberately NOT page-guarded (so not sendToPage): this
+  // only warms an image cache using the page's cookies, which works from any
+  // BoostUSA page. A page guard would abort long prefetch runs on a harmless
+  // navigation for no safety gain. Same reasoning as fetchImageBlob().
   const msg = { action: 'PREFETCH_IMAGES', images: urls };
   const tabId = state.detection && state.detection.tabId;
   if (typeof tabId === 'number') msg.targetTabId = tabId;
@@ -2310,7 +2412,9 @@ function applyPassWithShim(entry, pass, newStatus, kindLabel) {
     aiAnswer: pass.aiAnswer,
     options: synthesizeOptions(q, pass),
   };
-  chrome.runtime.sendMessage(
+  // Pinned to the reviewed form. This one writes a real value into a real
+  // survey, so an unpinned dispatch is the worst case of the whole set.
+  sendToRunPage(
     { action: 'APPLY_ANSWER', question: q, aiItem: shim },
     (resp) => {
       if (resp?.ok) {
@@ -2400,7 +2504,7 @@ function reconsiderEntry(entry) {
     entry.status === 'accepted-verified';
 
   if (wasApplied) {
-    chrome.runtime.sendMessage(
+    sendToRunPage(
       { action: 'REVERT_ANSWER', question: entry.question },
       (resp) => {
         if (resp?.ok) {
@@ -2480,8 +2584,9 @@ if (els.btnRefresh) {
 }
 
 function focusQuestionInPage(uid) {
-  chrome.runtime.sendMessage({ action: 'FOCUS_QUESTION', questionUid: uid }, (resp) => {
-    if (!resp?.ok) showToast('Could not locate that question on the page');
+  sendToRunPage({ action: 'FOCUS_QUESTION', questionUid: uid }, (resp) => {
+    if (chrome.runtime.lastError) return showToast('Could not reach the form page');
+    if (!resp?.ok) showToast(resp?.error || 'Could not locate that question on the page');
   });
 }
 
@@ -2688,7 +2793,13 @@ function rescrapeForGroundTruth() {
     // Don't let a wedged content script block the send indefinitely.
     setTimeout(() => done(null), 4000);
     try {
-      chrome.runtime.sendMessage({ action: 'SCRAPE' }, (resp) => {
+      // Pinned to the reviewed form's page, not the active tab. Tabbing away
+      // before pressing Send Feedback is normal use, and an unpinned scrape
+      // does not fail there - if the focused tab is another WKFC form it
+      // succeeds, and that form's answers get submitted as this run's ground
+      // truth. Returning null is the correct outcome when the page is gone;
+      // the payload then declares 'unavailable' instead of inventing a value.
+      sendToRunPage({ action: 'SCRAPE' }, (resp) => {
         if (chrome.runtime.lastError) return done(null);
         done(resp?.success && Array.isArray(resp.items) ? resp.items : null);
       });
@@ -2836,7 +2947,7 @@ function extractImages() {
   if (state.isImagesProcessing) return;
   showImgProgress('Extracting images…', '', 0, 1, 'Connecting to page…');
 
-  chrome.runtime.sendMessage({ action: 'EXTRACT_IMAGES' }, (resp) => {
+  sendToPage({ action: 'EXTRACT_IMAGES' }, (resp) => {
     hideImgProgress();
     if (chrome.runtime.lastError) return failExtract('Could not connect to the page. Make sure you\'re on an LC360 survey page.');
     if (!resp) return failExtract('No response from content script. Try refreshing the LC360 page.');
@@ -2922,7 +3033,7 @@ function applyApiSort() {
   if (state.isImagesProcessing || !state.apiResults) return;
   showImgProgress('Applying AI sort...', '', 0, 1, 'Reordering on page…');
 
-  chrome.runtime.sendMessage(
+  sendToPage(
     { action: 'APPLY_API_RESULTS', results: state.apiResults, labelMap: buildLabelMap() },
     (resp) => {
       hideImgProgress();
@@ -2949,7 +3060,7 @@ function applyOriginalSort() {
   // content script falls back to the original-snapshot labels.
   const labelMap = state.apiResults ? buildLabelMap() : null;
 
-  chrome.runtime.sendMessage({ action: 'RESTORE_IMAGES', labelMap }, (resp) => {
+  sendToPage({ action: 'RESTORE_IMAGES', labelMap }, (resp) => {
     hideImgProgress();
     if (chrome.runtime.lastError || !resp) return showToast('Failed to restore original');
     if (resp.error) return showToast('Error: ' + resp.error);
@@ -3336,7 +3447,7 @@ async function displayDescriptions() {
     // AI/Original toggles appear. Order stays put until the user presses a
     // sort button - labels and order are independent now.
     const defaultLabelMap = buildLabelMap();
-    chrome.runtime.sendMessage(
+    sendToPage(
       { action: 'SET_IMAGE_LABELS_BULK', labelMap: defaultLabelMap },
       (resp) => {
         if (!chrome.runtime.lastError && resp && resp.images) {
@@ -3638,7 +3749,7 @@ function setLabelChoice(photoId, choice, card) {
   const imgRef = state.images.find((i) => i.photoId === photoId);
   if (imgRef) imgRef.label = newLabel;
 
-  chrome.runtime.sendMessage(
+  sendToPage(
     { action: 'SET_IMAGE_LABEL', photoId, label: newLabel },
     (resp) => {
       if (chrome.runtime.lastError || !resp?.ok) {
@@ -3657,7 +3768,7 @@ function setLabelChoice(photoId, choice, card) {
  */
 function focusImageInPage(photoId) {
   if (!photoId) return;
-  chrome.runtime.sendMessage({ action: 'FOCUS_IMAGE', photoId }, (resp) => {
+  sendToPage({ action: 'FOCUS_IMAGE', photoId }, (resp) => {
     if (chrome.runtime.lastError) return;
     if (!resp?.ok) showToast('Could not locate that photo on the page');
   });
