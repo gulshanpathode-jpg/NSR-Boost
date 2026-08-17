@@ -23,14 +23,31 @@ so the extension goes completely dark rather than half-working.
 The gate is applied in three places, because General Information and the photo
 panel do not go through the form matcher:
 
-| Path | Where |
-|---|---|
-| DynForms form pages | `NSR_FORMS.matchForm()` |
-| General Information | `detectForm()` GI branch in `content/content.js` |
-| Order Photos | `detectImages(surveyType)` in `content/content.js` |
+| Path | Where | Survey type read from |
+|---|---|---|
+| DynForms form pages | `NSR_FORMS.matchForm()` | engine only |
+| General Information | `detectForm()` GI branch in `content/content.js` | `.ri.ri-l` "Survey Type" row |
+| Order Photos | `detectImages(surveyType)` in `content/content.js` | whichever of the two applies |
+
+On a form page the type is read from the engine and **only** the engine —
+
+```js
+LC360Forms.getLoadedFormInstance().engine.formInfo.inspectionInfo.inspectionType
+```
+
+There is deliberately no DOM fallback there; it would let page markup stand in
+for the engine and weaken the gate. General Information is the exception and has
+to be — `getLoadedFormInstance()` *throws* on that page, so the display row is
+the only source available.
+
+There is **no `Utilant.CaseTypeName`** on BoostUSA and no hidden input carrying
+the survey type. That global was NSR-only.
 
 To support more survey types, add them to `SURVEY_TYPES` in
-[`common/forms.js`](common/forms.js). Everything keys off that one object.
+[`common/forms.js`](common/forms.js) and list them in the relevant registry
+entries' `surveyTypes` arrays. Note the key is `surveyTypes` here, not
+NSR_LMS's `caseTypes` — anything ported across that walks the registry needs
+the rename, or it silently sees no survey types at all.
 
 ---
 
@@ -91,18 +108,19 @@ extractor does not have to infer any of it from markup.
 | Message router (`content/content.js`) | **Done** |
 | Form registry — WKFC: Core Revised | **Done**, detection verified |
 | Form registry — WKFC Cover | **Done**, fields differ from NSR (see below) |
-| Form registry — General Information | **Done**, extraction verified |
+| Form registry — General Information | **Done** — full 12-key knowledge-base payload, verified live |
 | Highlighter, manifest | **Done** |
 | Service worker | **Adapted** — two-world injection, `capabilitiesForUrl` |
 | Photo read path | **Done**, URLs verified to fetch |
 | Order Photos — AI sort + labels + restore | **Done**, full round-trip verified live |
 | Auth / LMS licence + metering | **Inherited unchanged** from NSR_LMS |
 | Backend | `qagent.dhaninfo.ai` — `/verify-direct`, `/knowledge`, `/feedback`, unchanged |
-| **Write path** (`setValues` → `save`) | **Written, NOT verified** — needs an editable survey |
+| **Write path** — `setValues` | **Done**, verified live on an editable Cover form (see below) |
+| **Write path** — `save` | **Written, NOT verified** — no explicit save has been fired yet |
 | Side panel | **Partially rewired** — photo URLs and inspection-id parsing updated; verify/KB flows untouched and untested end-to-end |
 | Photo modal viewer (`imageModal.js`) | **Ported** — endpoint + stacking checked, not yet clicked through |
 | Address block + Google / Maps lookup | **Done** — engine-sourced, works on form pages too |
-| Survey-type gate (WKFC only) | **Done** — enforced on forms, GI and photos |
+| Survey-type gate (WKFC only) | **Done** — enforced on forms (engine only), GI and photos |
 
 ### Verified live
 
@@ -114,9 +132,48 @@ as hidden by a visibility rule; 0 label or control-resolution failures;
 options and selection state via `getCurrentControlItems()`; detection matches
 on title + all 4 signature headings.
 
-**General Information** — page detected, 106 label/value pairs read,
-Survey Type (`Rec Management_Test_1`) and Survey Number (`22081`) resolved,
-address extracted with `<br>` handling and the geocode trailer stripped.
+**General Information** — page detected, 106 label/value pairs read, Survey Type
+and Survey Number (`22081`) resolved, address extracted with `<br>` handling and
+the geocode trailer stripped.
+
+Against survey #22035:
+
+**Survey type** — the engine reports `"WKFC Property Standard"` verbatim on both
+WKFC Cover and WKFC: Core Revised, and the GI "Survey Type" row carries the
+identical string. The production value matches `SURVEY_TYPES.WKFC` exactly, so
+the gate is a hard equality check rather than the advisory filter it started as.
+
+**General Information** — 139 label/value pairs across both grids (the survey
+detail grid and the Extra Info panel, see below), emitting all **12**
+knowledge-base keys: ConstructionType, NumberStories, NumberOfBuildings,
+RoofType, Roofing, Sprinklers, YearBuilt, Plumbing, Wiring, Heating, Occupancy
+and Address.
+
+**WKFC Cover** — 16 questions extracted; the whitelist emits the single NSR
+contract field that exists here and omits the four that do not.
+
+**Order Photos** — opens on all three pages (General Information, Cover, Core
+Revised) with the same 17 items and `UseLabelCollections: false`. Note the
+engine equation above does **not** hold on General Information — the button and
+dialog work there, but `getLoadedFormInstance()` throws, which is why the photo
+gate falls back to the GI display row on that page.
+
+### General Information has two grids
+
+The generic fields NSR served from its Generic Fields table live in the **Extra
+Info** panel on BoostUSA, under different classes:
+
+| Grid | Label | Value | Rows on 22035 |
+|---|---|---|---|
+| survey detail | `.ri.ri-l` | `.ri` | 109 |
+| Extra Info (`#genFieldSection`) | `.genFieldR.genFieldR-l` | `.genFieldR` | 31 |
+
+`readPairs()` walks both, survey grid first (it wins on any shared label).
+Reading only `.ri.ri-l` was why the GI payload used to carry the address alone.
+
+The same data is also on `formInfo.genericFields` as
+`{ label: { actualValue, formattedValue } }`, which is cleaner and works on form
+pages too — unused, because GI has no engine and would need the DOM path anyway.
 
 **Photos** — thumbnail (8 KB) and full-res (371 KB) URLs both fetch 200
 `image/jpeg` with session cookies.
@@ -126,14 +183,45 @@ all 50 ids resolved from `tmplItem()`, order reversed and applied exactly,
 three labels written and read back, then order *and* labels restored to
 snapshot precisely. Template bindings survived every move. Nothing saved.
 
+### The write path, verified live
+
+Against an **editable** WKFC Cover form (`getIsReview() === false`,
+`printView === false`, 56 rendered inputs, `inspectionStatusID` 700). Note that
+`isUserInspector` and `getIsFieldRep()` were both `false` here and the form was
+still editable — which is exactly why `readMode().editable` trusts the rendered
+input count over the role flags.
+
+`setValues` writes correctly through the engine on radio and checkbox controls,
+and reads back through `getValue()`. **`save` has still not been fired** —
+neither `saveLoadedFormSilently()` nor `saveLoadedForm()` has been exercised, so
+persistence is verified no further than the in-page model.
+
+**`CheckBoxList.setValue()` is additive.** This is the one real trap the write
+path hides, and it cost a live bug. The engine's implementation ticks every
+label it is handed and unticks nothing:
+
+```js
+if (value == null) { $('input', this.table).prop('checked', false); return; }
+for (each label in value)
+  $('input[value="' + label + '"]', this.table).prop('checked', true).length
+    || this.addItem(label, true);
+```
+
+So writing `['B']` over a control already holding `['A', 'C']` yields all three.
+`setValue(null)` is the only branch that clears, so `setValues()` clears first
+on multi-select controls — see `isMultiSelect()` in `page/dynforms-agent.js`.
+This affected accept **and** revert; both are fixed and verified.
+
+Radio lists are not affected: they render as real `<input type="radio">` sharing
+one `name`, so the browser unticks the previous choice itself. Single boolean
+checkboxes are not affected either — their `setValue` branch writes `!!value`.
+
 ### Not verified
 
-**The write path.** The survey used for analysis renders in **review / print
-view** (`LC360Forms.getIsReview() === true`, `printView === true`,
-`isUserInspector === false`), where no input elements exist at all. The agent
-detects this and refuses to write with a clear message rather than failing
-silently — but `setValue()` → autosave has not been exercised against a live
-editable form. See `docs/PLATFORM-ANALYSIS.md` §5.
+**Rule re-firing on an AI-applied answer.** `setValue()` sets inputs via jQuery
+`.prop('checked', …)`, which fires no `change` event. Whether dependent
+visibility rules, calculations and scoring re-run on a programmatic write the
+way they do for a human click is **untested**.
 
 **The side panel end-to-end.** Its detection/verify/KB flows are inherited
 from NSR_LMS and have not been exercised against BoostUSA responses.
@@ -152,11 +240,30 @@ still exists on BoostUSA:
 | Underwriter concerns / Inspection comments | present |
 
 The BoostUSA cover is a 16-control summary form instead (Survey Date, Opinion
-of Risk, Red Flags, contact block, Areas Reviewed, …). The registry whitelist
-now lists what actually exists, but **whether the backend wants these keys is
-an open question** — the `/knowledge` contract was written against the old
-five. It also has two controls both labelled "Describe", so `form_text_dict`
-qualifies colliding keys with their sub-section.
+of Risk, Red Flags, contact block, Areas Reviewed, …). It also has two controls
+both labelled "Describe", so `form_text_dict` qualifies colliding keys with
+their sub-section.
+
+The registry `fields` list holds **the NSR five and nothing else**.
+`toTextDict()` filters the page's questions *by* the whitelist, so a label that
+is not on the form never becomes a key — nothing is ever sent empty. The four
+missing narratives stay listed so they flow through automatically on any tenant
+or cover revision that does carry them.
+
+Verified on 22035 — the cover POSTs exactly one key:
+
+```
+Underwriter concerns / Inspection comments      (391 chars)
+```
+
+The cover's own narratives — `Areas Reviewed`, `Opinion of Risk`, `Comment` —
+were in the whitelist and have been removed. They are the real narrative content
+of this form, but they are not part of the `/knowledge` cover contract and the
+backend was never asked for them. Re-add them to `fields` if that changes.
+
+So the cover flow currently carries a single field to the knowledge base. If
+that is too thin to be worth a POST, the fix is a backend conversation about
+accepting the BoostUSA keys, not an extension change.
 
 ---
 

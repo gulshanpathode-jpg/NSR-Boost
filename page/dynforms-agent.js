@@ -415,7 +415,7 @@
    * on the loaded form instance, available on **every form page** rather than
    * only on General Information:
    *
-   *   engine.formInfo.inspectionInfo.inspectionType   e.g. "Rec Management_Test_1"
+   *   engine.formInfo.inspectionInfo.inspectionType   e.g. "WKFC Property Standard"
    *
    * `inspectionTypeCategory` sits alongside it ("Property") but is a coarser
    * grouping and is not what the registry filters on.
@@ -533,6 +533,32 @@
   // ── Writing ───────────────────────────────────────────────────────
 
   /**
+   * Does this control render a multi-select list of checkboxes?
+   *
+   * It matters because the engine's CheckBoxList.setValue() is *additive*: for
+   * a non-null value it walks the labels it was handed and ticks each one -
+   *
+   *   for (t = $.isArray(t) ? t : [t], i = 0; i < t.length; i++)
+   *     $('input[value="' + t[i] + '"]', this.table).prop('checked', true)
+   *       .length || this.addItem(t[i], true);
+   *
+   * - and never unticks anything. Writing ['B'] over a control already holding
+   * ['A', 'C'] therefore leaves all three ticked. `setValue(null)` is the only
+   * branch that clears (`$('input', this.table).prop('checked', false)`), so
+   * every multi-select write has to be a clear followed by a set.
+   *
+   * Radio lists are exempt: they render as real <input type="radio"> sharing
+   * one `name`, so the browser unticks the previous choice for us. Single
+   * boolean checkboxes are exempt too - their setValue branch writes `!!value`,
+   * which already moves in both directions.
+   */
+  function isMultiSelect(ctrl, container) {
+    if (!container) return false;
+    if (ctrl && ctrl.settings && ctrl.settings.valueType === 'boolean') return false;
+    return container.querySelector('input[type="checkbox"]') !== null;
+  }
+
+  /**
    * Apply values through the engine.
    *
    * `setValue()` is the engine's own entry point, so visibility rules,
@@ -574,6 +600,10 @@
 
       const before = safeGetValue(ctrl);
       try {
+        // Multi-select checkbox lists must be cleared first - see isMultiSelect().
+        if (isMultiSelect(ctrl, document.getElementById(controlID))) {
+          ctrl.setValue(null);
+        }
         ctrl.setValue(u.value);
         results.push({ controlID, ok: true, before, after: safeGetValue(ctrl) });
       } catch (err) {
