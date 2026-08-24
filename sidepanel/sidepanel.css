@@ -1282,6 +1282,25 @@ h1, h2, h3 { font-weight: 600; letter-spacing: -0.2px; }
   border-top: 1px solid var(--border);
 }
 
+/* ── Config: dashboard link ──────────────────────────────────── */
+/* An outlined button rather than a filled one: it leaves the panel, so it
+   should not compete with the primary in-panel actions. */
+.btn-dashboard {
+  display: inline-flex; align-items: center; gap: 8px;
+  width: 100%;
+  justify-content: center;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--primary);
+  background: transparent;
+  color: var(--primary);
+  font-size: 13px; font-weight: 600;
+  cursor: pointer;
+  transition: background 140ms, color 140ms;
+}
+.btn-dashboard:hover { background: var(--primary); color: #fff; }
+.btn-dashboard:focus-visible { outline: 2px solid rgba(36, 102, 235, 0.35); outline-offset: 2px; }
+
 /* ── Config: per-block colour pickers ────────────────────────── */
 .color-row {
   display: flex;

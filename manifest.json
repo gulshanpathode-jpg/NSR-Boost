@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "NSR-Boost",
+  "name": "Boost USA",
   "version": "1.0.0",
   "description": "AI-assisted form review for the BoostUSA (LossControl360) platform. Drives the DynForms engine directly rather than scraping the DOM.",
 
@@ -21,7 +21,7 @@
   ],
 
   "action": {
-    "default_title": "Open NSR-Boost",
+    "default_title": "Open Boost USA",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",

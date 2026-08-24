@@ -41,7 +41,7 @@ function loadFromStorage() {
   const key = rawHash ? decodeURIComponent(rawHash) : '';
 
   if (!key) {
-    setLoadingMessage('No results key in URL - this page must be opened from the NSR-Boost side panel.');
+    setLoadingMessage('No results key in URL - this page must be opened from the Boost USA side panel.');
     return;
   }
 
