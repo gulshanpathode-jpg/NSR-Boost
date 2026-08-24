@@ -71,9 +71,11 @@ function renderResults(data) {
 
   // ── Survey metadata ─────────────────────────────────────────────
   const meta = data.meta || {};
-  document.getElementById('rSurvey').textContent  = meta.surveyNumber || '-';
-  document.getElementById('rInsured').textContent = meta.insuredName  || '-';
-  document.getElementById('rPolicy').textContent  = meta.policyNumber || '-';
+  // Survey number only. The Insured / Policy rows were removed: nothing ever
+  // populated meta.insuredName or meta.policyNumber - the photo panel's meta
+  // carries surveyNumber and surveyType and nothing else (see extractPanel in
+  // page/photos-agent.js) - so both rows always rendered a bare "-".
+  document.getElementById('rSurvey').textContent = meta.surveyNumber || '-';
 
   // ── Stats ───────────────────────────────────────────────────────
   const results    = Array.isArray(data.results) ? data.results : [];
