@@ -444,6 +444,17 @@ h1, h2, h3 { font-weight: 600; letter-spacing: -0.2px; }
 #btn-accept-all { color: var(--success); }
 #btn-accept-all:hover { background: var(--success-soft); color: #047857; }
 
+/* Compare opens the standalone side-by-side report. It sits first in the
+   bulk-bar and carries the icon + primary tint so it reads as "go somewhere
+   else" rather than as another bulk decision alongside Accept/Reject all. */
+#btn-compare {
+  display: inline-flex; align-items: center; gap: 5px;
+  color: var(--primary);
+}
+#btn-compare:hover { background: var(--primary-soft); color: var(--primary-hover); }
+#btn-compare:disabled { opacity: .45; cursor: not-allowed; }
+#btn-compare:disabled:hover { background: transparent; color: var(--primary); }
+
 /* ── Badges ──────────────────────────────────────────────────── */
 .badge {
   display: inline-block;

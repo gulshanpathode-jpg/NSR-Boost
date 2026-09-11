@@ -72,6 +72,7 @@ const els = {
   countRejected: $('count-rejected'),
   btnRejectAll: $('btn-reject-all'),
   btnAcceptAll: $('btn-accept-all'),
+  btnCompare: $('btn-compare'),
   btnRefresh: $('btn-refresh'),
   btnDashboard: $('btn-dashboard'),
   suggestionList: $('suggestion-list'),
@@ -2196,6 +2197,10 @@ function updateBulkBar() {
   // > form > image), letting the user bulk-confirm AI suggestions at once.
   els.btnRejectAll.style.display = anyPending ? 'inline-flex' : 'none';
   els.btnAcceptAll.style.display = anyPending ? 'inline-flex' : 'none';
+  // Compare is a read-only report, so unlike Accept/Reject-all it stays put
+  // once the queue exists - reviewers still want the side-by-side after
+  // every card has been actioned. It only greys out on an empty queue.
+  if (els.btnCompare) els.btnCompare.disabled = state.entries.length === 0;
 }
 
 function repaintEntry(entry) {
@@ -3375,6 +3380,152 @@ async function openResultsTab(resultsData) {
     chrome.storage.local.remove(key).catch(() => { });
     throw err;
   }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────
+// 8.14  Answer-comparison report
+// ─────────────────────────────────────────────────────────────────────
+//
+// The queue cards are the *review* surface: one question at a time, in a
+// 360px-wide panel, with the option list left implicit (only the chosen
+// label is shown). That is the right shape for deciding, and the wrong
+// shape for auditing - there is no way to see the question the way the
+// inspector saw it on LC360, and no way to hand the comparison to anyone
+// who doesn't have the extension installed.
+//
+// The comparison report is that second surface. It re-draws every question
+// in the LC360 DynForms idiom (the real option list, rendered as the same
+// radio / checkbox / textbox control the site uses) once per answer source,
+// so the three values line up option-for-option:
+//
+//   Current form value      question.answer     - what LC360 has now
+//   Page / Form suggestion  formPass.aiAnswer   - AI from the form pages
+//   AI suggestion           imagePass.aiAnswer  - AI from the photos
+//
+// Handoff reuses the openResultsTab() contract exactly: stash the payload
+// in chrome.storage.local under a one-shot key, pass the key as the URL
+// fragment, and let the page delete the entry once it has rendered.
+
+/**
+ * Flatten state.entries into the section-grouped, self-contained shape the
+ * comparison page renders. Self-contained matters: the report tab has no
+ * access to state, and the payload outlives this side panel, so everything
+ * it needs to draw a question travels with it.
+ *
+ * state.entries is already in document order (buildEntries walks the
+ * extracted sections in order), so grouping on a section-text change is
+ * enough to rebuild the page's own section structure.
+ */
+function buildComparisonPayload() {
+  const d = state.detection || {};
+  const sections = [];
+  let current = null;
+
+  state.entries.forEach((entry) => {
+    const q = entry.question || {};
+    const sectionText = entry.sectionText || 'General';
+    if (!current || current.text !== sectionText) {
+      current = { text: sectionText, questions: [] };
+      sections.push(current);
+    }
+
+    current.questions.push({
+      uid: entry.uid,
+      questionId: q.questionId || '',
+      questionText: q.questionText || '',
+      inputType: q.inputType || 'text',
+      subheader: entry.subheader || '',
+      // Options carry `selected` as the page had it at scrape time. The
+      // report re-derives selection per column rather than trusting this
+      // flag, but it is kept so the option ORDER stays the page's order.
+      options: Array.isArray(q.options)
+        ? q.options.map((o) => ({ label: o.label, selected: !!o.selected }))
+        : [],
+      currentAnswer: q.answer == null ? (q.inputType === 'checkbox' ? [] : '') : q.answer,
+      formPass: entry.formPass
+        ? {
+          answer: entry.formPass.aiAnswer,
+          sourceLabels: Array.isArray(entry.formPass.aiSourceLabels)
+            ? entry.formPass.aiSourceLabels.filter((x) => typeof x === 'string' && x.trim() !== '')
+            : [],
+        }
+        : null,
+      imagePass: entry.imagePass
+        ? {
+          answer: entry.imagePass.aiAnswer,
+          sourcePhotoIds: Array.isArray(entry.imagePass.aiSourcePhotoIds)
+            ? entry.imagePass.aiSourcePhotoIds
+            : [],
+        }
+        : null,
+      mode: entry.mode,
+      matchesCurrent: !!entry.matchesCurrent,
+      status: entry.status,
+    });
+  });
+
+  return {
+    meta: {
+      formName: (d.form && d.form.form && d.form.form.name) || d.title || 'SmartFill',
+      surveyNumber: state.surveyNumber || '',
+      surveyType:
+        d.caseTypeName
+        || (d.form && d.form.caseTypeName)
+        || (d.images && d.images.meta && d.images.meta.surveyType)
+        || '',
+      address: (d.generalInfo && d.generalInfo.address) || '',
+      pageUrl: d.url || '',
+      resultId: state.resultId || '',
+      generatedAt: new Date().toISOString(),
+    },
+    sections,
+  };
+}
+
+/**
+ * Open the comparison report beside the current tab. Mirrors
+ * openResultsTab(): same one-shot storage key, same "place it to the right
+ * of the tab the user is looking at" placement, same reason for running in
+ * the side panel rather than the service worker (MV3 worker tear-down must
+ * not be able to interrupt the open mid-flight).
+ */
+async function openComparisonTab() {
+  if (state.entries.length === 0) {
+    showToast('Nothing to compare yet - run Sync first');
+    return;
+  }
+
+  const key = 'compare:' + Date.now() + ':' + Math.random().toString(36).slice(2, 8);
+  const payload = buildComparisonPayload();
+
+  try {
+    await chrome.storage.local.set({ [key]: payload });
+
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const createOpts = {
+      url: chrome.runtime.getURL('compare/compare.html') + '#' + encodeURIComponent(key),
+      active: true,
+    };
+    if (activeTab && typeof activeTab.index === 'number') {
+      createOpts.index = activeTab.index + 1;
+      createOpts.openerTabId = activeTab.id;
+    }
+    if (activeTab && typeof activeTab.windowId === 'number') {
+      createOpts.windowId = activeTab.windowId;
+    }
+
+    await chrome.tabs.create(createOpts);
+    logActivity(`Opened comparison report (${state.entries.length} questions)`, 'info');
+  } catch (err) {
+    console.error('[SmartFill] Failed to open comparison tab:', err);
+    showToast('Could not open comparison: ' + err.message);
+    chrome.storage.local.remove(key).catch(() => { });
+  }
+}
+
+if (els.btnCompare) {
+  els.btnCompare.addEventListener('click', openComparisonTab);
 }
 
 

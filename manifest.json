@@ -5,7 +5,6 @@
   "description": "AI-assisted form review for the BoostUSA (LossControl360) platform. Drives the DynForms engine directly rather than scraping the DOM.",
 
   "permissions": [
-    "activeTab",
     "scripting",
     "storage",
     "sidePanel",
@@ -15,7 +14,6 @@
 
   "host_permissions": [
     "https://boostusa.losscontrol360.com/*",
-    "*://*.losscontrol360.com/*",
     "https://qagent.dhaninfo.ai/*",
     "https://lms.dhaninfo.ai/*"
   ],
