@@ -328,6 +328,24 @@
             <div id="img-gallery" class="image-gallery"></div>
           </div>
 
+          <!-- Licence consumption meter.
+               Placed immediately above the CTA on purpose: this is the one
+               moment the number is actionable, because pressing the button
+               below is what spends it. Populated from
+               GET /external/usage (read-only - it never increments), and
+               hidden until that call succeeds so a metering outage shows
+               nothing rather than a misleading zero. -->
+          <div class="card usage-card" id="usage-card" style="display:none;">
+            <div class="usage-head">
+              <span class="usage-title">Image allowance</span>
+              <span class="usage-figure" id="usage-figure"></span>
+            </div>
+            <div class="usage-track">
+              <div class="usage-fill" id="usage-fill" style="width:0%"></div>
+            </div>
+            <div class="usage-detail" id="usage-detail"></div>
+          </div>
+
           <!-- Primary CTA for the image pipeline -->
           <div id="img-footer" style="display:none;">
             <button class="btn btn-primary" id="btn-img-describe">
@@ -561,6 +579,44 @@
 
       <button class="profile-gate-cancel" id="profile-gate-cancel" type="button" hidden>
         Cancel
+      </button>
+    </div>
+  </div>
+
+  <!-- ═════════ SUBSCRIPTION-EXPIRED DIALOG ═════════
+       Shown when the licence has no images left and the user presses the
+       image-pipeline button. Unlike the sign-in gate this is not a
+       permanent overlay: the session is valid and the rest of the extension
+       (form Sync, the review queue, the comparison report) still works -
+       only the metered image pipeline is closed. So it is dismissible, and
+       it appears on the action rather than on panel open. -->
+  <div class="quota-gate" id="quota-gate" hidden role="alertdialog"
+       aria-modal="true" aria-labelledby="quota-gate-title"
+       aria-describedby="quota-gate-body">
+    <div class="quota-gate-card">
+      <span class="quota-gate-icon" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2.1"
+             stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="9"/>
+          <line x1="12" y1="7.5" x2="12" y2="13"/>
+          <line x1="12" y1="16.5" x2="12.01" y2="16.5"/>
+        </svg>
+      </span>
+      <h2 class="quota-gate-title" id="quota-gate-title">Subscription Expired</h2>
+      <p class="quota-gate-body" id="quota-gate-body">
+        Your subscription has expired. Please renew your subscription to
+        continue using the extension.
+      </p>
+      <!-- Opened through the click handler rather than as a plain target
+           blank link, so the tab lands next to the side panel's window the
+           same way every other outbound link in this panel does. -->
+      <a class="btn btn-primary quota-gate-cta" id="quota-gate-contact"
+         href="https://boost-usa.com/contact-us/" target="_blank" rel="noopener noreferrer">
+        Contact Us
+      </a>
+      <button class="quota-gate-dismiss" id="quota-gate-dismiss" type="button">
+        Close
       </button>
     </div>
   </div>

@@ -512,6 +512,90 @@
       font-size: 10px; letter-spacing: .6px;
     }
 
+    /* ── Source-photo disclosure ──────────────────────────────────────
+       A <details>, so open/closed state, the keyboard behaviour and the
+       accessible name are the browser's job - and so the print stylesheet
+       can force it open with details[open] and get every link into the PDF
+       regardless of what the reader expanded on screen. */
+    .lc-photos {
+      border-top: 1px solid var(--lc-hair);
+      background: var(--lc-alt);
+      font-family: var(--font-sans);
+    }
+    .lc-photos-summary {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-size: 11.5px; font-weight: 600;
+      color: var(--text-muted);
+      list-style: none;                 /* Firefox default marker */
+      user-select: none;
+    }
+    /* The default disclosure triangle sits outside the flex row and drags
+       the baseline around; we draw our own chevron in .lc-photos-hint. */
+    .lc-photos-summary::-webkit-details-marker { display: none; }
+    .lc-photos-summary::marker { content: ''; }
+    .lc-photos-summary:hover { background: var(--card-hover, var(--card)); }
+    .lc-photos-summary:focus-visible {
+      outline: 2px solid var(--lc-accent); outline-offset: -2px;
+    }
+    .lc-photos-count { color: var(--text); }
+    .lc-photos-hint {
+      width: 8px; height: 8px; margin-left: auto;
+      border-right: 1.8px solid var(--text-faint);
+      border-bottom: 1.8px solid var(--text-faint);
+      transform: rotate(45deg) translate(-2px, -2px);
+      transition: transform .15s ease;
+    }
+    .lc-photos[open] .lc-photos-hint {
+      transform: rotate(-135deg) translate(-2px, -2px);
+    }
+
+    /* The `display` is deliberately scoped to [open] and not set on the
+       element itself. A bare `display: grid` here overrides the user agent's
+       own `details:not([open]) > *:not(summary) { display: none }`, which is
+       still how Chrome hides closed disclosure content - the list then
+       renders permanently expanded and the toggle does nothing visible. */
+    .lc-photos-list {
+      margin: 0; padding: 0 12px 10px; list-style: none;
+      gap: 6px;
+    }
+    .lc-photos[open] > .lc-photos-list { display: grid; }
+    .lc-photo-link {
+      display: flex; align-items: center; gap: 10px;
+      padding: 6px 8px;
+      border: 1px solid var(--border); border-radius: 8px;
+      background: var(--card);
+      text-decoration: none;
+      color: inherit;
+    }
+    .lc-photo-link:hover { border-color: var(--lc-accent); }
+    .lc-photo-thumb {
+      width: 44px; height: 44px; flex: 0 0 44px;
+      object-fit: cover; border-radius: 6px;
+      background: var(--lc-alt);
+      border: 1px solid var(--lc-hair);
+    }
+    .lc-photo-text { min-width: 0; }
+    .lc-photo-name {
+      display: block;
+      font-size: 12px; font-weight: 600; color: var(--text);
+    }
+    /* The URL is a GUID-heavy query string with no spaces, so it needs an
+       explicit break rule or it forces the whole card wide. Shown as text
+       and not only as an href because a PDF that gets printed on paper
+       loses the link, and then this is the only route back to the image. */
+    .lc-photo-url {
+      display: block;
+      font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+      font-size: 10px; line-height: 1.45;
+      color: var(--text-faint);
+      overflow-wrap: anywhere; word-break: break-all;
+    }
+
+    /* Print-only masthead; the screen keeps the interactive .top-bar. */
+    .print-head { display: none; }
+
     /* Empty state */
     .empty-state {
       text-align: center; padding: 48px 24px; color: var(--text-muted);
@@ -545,11 +629,36 @@
       .lc-q-row { grid-template-columns: minmax(150px, 26%) 1fr !important; }
       .lc-columns.cols-2 { grid-template-columns: repeat(2, 1fr) !important; }
       .lc-columns.cols-3 { grid-template-columns: repeat(3, 1fr) !important; }
-      .lc-section-title, .lc-q-labelcol, .lc-refs,
+      .lc-section-title, .lc-q-labelcol, .lc-refs, .lc-photos,
       .lc-option.is-on, .lc-option.is-added, .lc-option.is-removed,
       .lc-option.is-on .lc-mark, .pill, .lc-field.is-changed {
         -webkit-print-color-adjust: exact; print-color-adjust: exact;
       }
+
+      /* The document's own title block, in place of the hidden top bar. */
+      .print-head { display: block; margin: 0 0 10px; }
+      .print-head-title {
+        font-size: 15pt; font-weight: 700; color: #14162e;
+      }
+      .print-head-meta {
+        display: flex; gap: 14px;
+        font-size: 8.5pt; color: #5a6079;
+      }
+
+      /* Every source-photo list is expanded on paper - a disclosure the
+         reader left shut is a UI state, not a decision about what belongs
+         in the report. The opening itself is done in JS (the beforeprint
+         handler sets the `open` attribute), because a closed <details> is
+         hidden by the UA through ::details-content rather than through a
+         `display` this sheet could override. */
+      .lc-photos-hint { display: none; }
+      .lc-photos-summary { cursor: default; }
+      .lc-photo-link { break-inside: avoid; text-decoration: none; }
+      /* Thumbnails are dropped: they need the reader's LC360 session cookie,
+         which the print renderer may not carry, and a page of broken-image
+         boxes is worse than the URLs alone. The links stay live. */
+      .lc-photo-thumb { display: none; }
+
       @page { size: A4 landscape; margin: 12mm; }
     }
   </style>
@@ -572,28 +681,33 @@
       </div>
     </div>
     <div class="top-actions no-print">
-      <button class="btn btn-ghost" id="btnPrint" type="button" title="Open the browser print dialog (choose 'Save as PDF' for a PDF)">
+      <button class="btn btn-primary" id="btnExport" type="button"
+              title="Open the print dialog - choose &quot;Save as PDF&quot; as the destination">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
              stroke="currentColor" stroke-width="2"
              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <polyline points="6 9 6 2 18 2 18 9"/>
-          <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
-          <rect x="6" y="14" width="12" height="8"/>
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="12" y1="18" x2="12" y2="12"/>
+          <polyline points="9 15 12 18 15 15"/>
         </svg>
-        <span>Print / PDF</span>
-      </button>
-      <button class="btn btn-primary" id="btnExport" type="button" title="Download this report as a Word document">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
-             stroke="currentColor" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-          <polyline points="7 10 12 15 17 10"/>
-          <line x1="12" y1="15" x2="12" y2="3"/>
-        </svg>
-        <span>Export Word</span>
+        <span>Export PDF</span>
       </button>
     </div>
   </header>
+
+  <!-- Print-only masthead. The on-screen top bar is chrome (buttons, a live
+       subtitle) and is hidden on paper; this is the document's own title
+       block, and it carries the scope line so an exported PDF made under a
+       filter or a search says so rather than passing as the whole survey.
+       exportPdf() fills both spans immediately before printing. -->
+  <div class="print-head" aria-hidden="true">
+    <div class="print-head-title">Smart Fill — Answer Comparison</div>
+    <div class="print-head-meta">
+      <span id="cPrintScope"></span>
+      <span id="cPrintStamp"></span>
+    </div>
+  </div>
 
   <div id="loadingState" class="loading-container">
     <div class="spinner"></div>

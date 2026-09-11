@@ -25,10 +25,11 @@
  *   radio would invite a reviewer to think they were editing the form.
  *
  * Export:
- *   "Export Word" serialises the CURRENT VIEW (search + filter applied) to
- *   a Word-readable .doc. Word's HTML support predates flexbox and grid, so
- *   the export is rebuilt on tables with inline styles rather than being a
- *   dump of the live DOM - see buildExportHtml().
+ *   "Export PDF" prints the CURRENT VIEW (search + filter applied) through
+ *   the browser's own print pipeline, with Save as PDF as the destination.
+ *   The print stylesheet in compare.html does the layout work; exportPdf()
+ *   only stamps the scope and the filename. See the note above wireExport()
+ *   for why this is not a Word export.
  */
 
 'use strict';
@@ -47,7 +48,31 @@ document.addEventListener('DOMContentLoaded', () => {
   loadFromStorage();
   wireToolbar();
   wireExport();
+  wireThumbFallback();
 });
+
+/**
+ * Drop any source-photo thumbnail that fails to load.
+ *
+ * This tab is chrome-extension:// and the photo handler is on the LC360
+ * origin, so whether the image resolves depends on the reader's cookies
+ * being sent cross-site - which is exactly the kind of thing a browser
+ * policy change or a signed-out reader takes away. The link and the URL
+ * beneath it still work in that case, so a failed thumbnail should vanish
+ * rather than leave a broken-image glyph next to good information.
+ *
+ * Capture phase and delegated: `error` does not bubble, and the rows are
+ * re-rendered on every filter change, so per-element listeners would have
+ * to be re-attached each time.
+ */
+function wireThumbFallback() {
+  document.addEventListener('error', (e) => {
+    const img = e.target;
+    if (img && img.classList && img.classList.contains('lc-photo-thumb')) {
+      img.remove();
+    }
+  }, true);
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // 1  Load
@@ -455,19 +480,72 @@ function renderFieldControl(q, col) {
 
 function renderRefs(q) {
   const labels = (q.formPass && Array.isArray(q.formPass.sourceLabels)) ? q.formPass.sourceLabels : [];
-  const photos = (q.imagePass && Array.isArray(q.imagePass.sourcePhotoIds)) ? q.imagePass.sourcePhotoIds : [];
+  const photos = sourcePhotosOf(q);
   if (labels.length === 0 && photos.length === 0) return '';
 
-  const chips = [];
-  labels.forEach((l) => chips.push(
+  const chips = labels.map((l) =>
     `<span class="lc-ref"><span class="lc-ref-key">Page</span>${escapeHtml(l)}</span>`
-  ));
-  if (photos.length) {
-    chips.push(
-      `<span class="lc-ref"><span class="lc-ref-key">Photos</span>${photos.length} source image${photos.length === 1 ? '' : 's'}</span>`
-    );
-  }
-  return `<div class="lc-refs">${chips.join('')}</div>`;
+  ).join('');
+
+  const chipRow = chips ? `<div class="lc-refs">${chips}</div>` : '';
+  return chipRow + renderPhotoRefs(photos);
+}
+
+/**
+ * The evidence photos as a disclosure.
+ *
+ * <details> rather than a click handler and a class toggle: the open/closed
+ * state, the arrow, the keyboard behaviour and the accessible name all come
+ * free and correct, and - the reason that matters here - `details[open]` is
+ * something the print stylesheet can force, so every link lands in the
+ * exported PDF whether or not the reader expanded the row on screen.
+ *
+ * Each row is a real <a href> to the LC360 photo handler, so it is
+ * copy-pasteable, opens in a new tab, and survives the PDF export as a live
+ * hyperlink. The full URL is printed under the thumbnail as text as well,
+ * because a PDF that gets printed on paper loses the href and the URL is
+ * then the only way back to the image.
+ */
+function renderPhotoRefs(photos) {
+  if (!photos.length) return '';
+
+  const rows = photos.map((p, i) => `
+    <li class="lc-photo">
+      <a class="lc-photo-link" href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer">
+        <img class="lc-photo-thumb" src="${escapeHtml(p.thumbUrl || p.url)}"
+             alt="Source image ${i + 1}" loading="lazy" />
+        <span class="lc-photo-text">
+          <span class="lc-photo-name">Source image ${i + 1}</span>
+          <span class="lc-photo-url">${escapeHtml(p.url)}</span>
+        </span>
+      </a>
+    </li>
+  `).join('');
+
+  const n = photos.length;
+  return `
+    <details class="lc-photos">
+      <summary class="lc-photos-summary">
+        <span class="lc-ref-key">Photos</span>
+        <span class="lc-photos-count">${n} source image${n === 1 ? '' : 's'}</span>
+        <span class="lc-photos-hint" aria-hidden="true"></span>
+      </summary>
+      <ul class="lc-photos-list">${rows}</ul>
+    </details>
+  `;
+}
+
+/**
+ * Evidence photos for a question, as { id, url, thumbUrl }.
+ *
+ * The side panel omits any photo it could not build a URL for (no caseID on
+ * the page URL), so an unlinkable photo never reaches here - which is why
+ * this can filter on `url` and let the Photos row disappear entirely rather
+ * than rendering a count that expands to dead rows.
+ */
+function sourcePhotosOf(q) {
+  const photos = q.imagePass && q.imagePass.sourcePhotos;
+  return Array.isArray(photos) ? photos.filter((p) => p && p.url) : [];
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -496,229 +574,113 @@ function wireToolbar() {
   });
 }
 
+
 // ─────────────────────────────────────────────────────────────────────
 // 7  Export
 // ─────────────────────────────────────────────────────────────────────
+//
+// One button, one output: a PDF, produced by the browser's own print
+// pipeline with "Save as PDF" as the destination.
+//
+// This replaced a Word export that was not really a Word export. That code
+// built an HTML string, typed the Blob `application/msword` and named the
+// file .doc - a format Word will usually open, but which is HTML underneath
+// and which any other handler (WordPad, a browser, a PDF viewer, Google
+// Docs) shows as raw markup, `<!--[if gte mso 9]><xml>` block and all.
+// Producing a real .docx would mean hand-writing a ZIP container and OOXML
+// parts, because the extension CSP blocks loading a library from a CDN.
+// Printing to PDF needs none of that, renders exactly what the reader sees,
+// and keeps the <a href> links on the source photos live in the output.
+//
+// What the print stylesheet in compare.html contributes: it hides the
+// chrome, forces the light palette, restores the column grid that the
+// viewport breakpoints would otherwise collapse, and opens every photo
+// disclosure so the links are in the PDF whether or not they were expanded
+// on screen.
 
 function wireExport() {
-  const printBtn = document.getElementById('btnPrint');
-  if (printBtn) printBtn.addEventListener('click', () => window.print());
-
   const exportBtn = document.getElementById('btnExport');
-  if (exportBtn) exportBtn.addEventListener('click', downloadWordDoc);
+  if (exportBtn) exportBtn.addEventListener('click', exportPdf);
+
+  // Bound to the window events rather than called from exportPdf(), so
+  // Ctrl+P and the browser menu produce the same document as the button.
+  //
+  // A closed <details> is hidden by the user agent through
+  // ::details-content, which a print stylesheet cannot reach - so the
+  // attribute has to be set for real and put back afterwards. Only the
+  // ones we opened are re-closed, so a row the reader had expanded stays
+  // expanded once the dialog is dismissed.
+  let openedForPrint = [];
+
+  window.addEventListener('beforeprint', () => {
+    openedForPrint = Array.from(document.querySelectorAll('.lc-photos:not([open])'));
+    openedForPrint.forEach((d) => { d.open = true; });
+  });
+
+  window.addEventListener('afterprint', () => {
+    openedForPrint.forEach((d) => { d.open = false; });
+    openedForPrint = [];
+  });
 }
 
 /**
- * Word reads HTML, but its layout engine predates flexbox and CSS grid and
- * ignores both - a straight dump of the live DOM opens as one long
- * single-column list with every column stacked. So the export is rebuilt
- * on <table> with inline styles, which Word has always laid out correctly.
+ * Print the report, scoped to the CURRENT VIEW.
  *
- * The exported document is the CURRENT VIEW, not the whole payload: if the
- * reader filtered to Different and searched "sprinkler", that is what they
- * asked to hand over. The applied filters are stamped into the header so
- * the document says so on its face.
+ * Two things happen around the print() call, both of which have to be undone
+ * afterwards:
+ *
+ *   · The document title becomes the export filename. Chrome seeds the
+ *     "Save as" name from document.title, so this is the only way to get a
+ *     meaningful filename out of a print-to-PDF without asking the user to
+ *     retype it.
+ *   · A scope line is written into the print-only header, so a PDF made
+ *     while a filter or search was active says so on its face rather than
+ *     silently looking like the whole survey.
+ *
+ * print() is synchronous - it returns once the dialog closes - so the
+ * restore runs after the user has saved or cancelled either way. It is
+ * still in a finally, because a print dialog that throws (headless, a
+ * blocked pop-up) must not leave the page renamed.
  */
-function downloadWordDoc() {
-  const html = buildExportHtml();
-  // The BOM is what tells Word the bytes are UTF-8; without it the degree
-  // signs and dashes in inspection labels open as mojibake.
-  const blob = new Blob(['﻿', html], { type: 'application/msword' });
-  const url = URL.createObjectURL(blob);
+function exportPdf() {
+  const previousTitle = document.title;
+  const scopeEl = document.getElementById('cPrintScope');
+  const stampEl = document.getElementById('cPrintStamp');
 
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = exportFilename();
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  // Revoke on the next frame - revoking synchronously can beat the
-  // download off the mark in Chrome.
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  if (scopeEl) scopeEl.textContent = scopeLine();
+  if (stampEl) stampEl.textContent = 'Generated ' + formatTimestamp(view.meta.generatedAt);
+  document.title = exportFilename();
+
+  try {
+    window.print();
+  } finally {
+    document.title = previousTitle;
+  }
 }
 
+/** "All 84 questions" / "12 of 84 questions (filter: different, search: "roof")". */
+function scopeLine() {
+  const shown = visibleSections().reduce((n, s) => n + s.questions.length, 0);
+  const total = allQuestions().length;
+
+  const notes = [];
+  if (view.filter !== 'all') notes.push(`filter: ${view.filter}`);
+  if (view.search.trim()) notes.push(`search: "${view.search.trim()}"`);
+
+  if (shown === total && notes.length === 0) {
+    return `All ${total} question${total === 1 ? '' : 's'}`;
+  }
+  return `${shown} of ${total} questions (${notes.join(', ')})`;
+}
+
+/**
+ * Seeds the Save-as-PDF filename. No extension: Chrome appends .pdf itself,
+ * and a literal ".pdf" here comes back as "….pdf.pdf".
+ */
 function exportFilename() {
   const survey = view.meta.surveyNumber ? `-Survey-${view.meta.surveyNumber}` : '';
   const d = new Date();
   const pad = (n) => String(n).padStart(2, '0');
   const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
-  return `SmartFill-Answer-Comparison${survey}-${stamp}.doc`;
-}
-
-// Inline style fragments. Word drops most of a <style> block's cascade, so
-// everything that must survive is set per element.
-// Colours mirror the live form: #e9e9e9 section band on a #ddd hairline,
-// #555 bold question labels, #3e3f3a bold option labels, #99948b field
-// rules. Arial rather than the site's Roboto - Word can be relied on for
-// Arial on every machine, and it is the site's own next fallback.
-const X = {
-  // The background is stated rather than left to the viewer: Word always
-  // paints a white page, but the same bytes opened in a browser inherit the
-  // reader's dark theme and render dark text on dark ground.
-  page: 'font-family:Arial,\'Helvetica Neue\',Helvetica,sans-serif;font-size:10pt;'
-    + 'color:#3e3f3a;background:#ffffff;',
-  h1: 'font-size:17pt;font-weight:bold;color:#1f2a44;margin:0 0 4pt;',
-  sub: 'font-size:9.5pt;color:#6b7280;margin:0 0 14pt;',
-  metaTable: 'width:100%;border-collapse:collapse;margin:0 0 16pt;border:1px solid #dddddd;',
-  metaKey: 'padding:5pt 8pt;border:1px solid #dddddd;background:#f5f5f5;font-size:8.5pt;'
-    + 'font-weight:bold;color:#555555;text-transform:uppercase;width:22%;',
-  metaVal: 'padding:5pt 8pt;border:1px solid #dddddd;font-size:10pt;',
-  section: 'background:#e9e9e9;border:1px solid #dddddd;color:#333333;font-size:11pt;'
-    + 'font-weight:bold;padding:5pt 8pt;margin:14pt 0 6pt;',
-  qTable: 'width:100%;border-collapse:collapse;border:1px solid #dddddd;margin:0 0 8pt;',
-  qHead: 'padding:6pt 9pt;border:1px solid #dddddd;background:#f5f5f5;',
-  qLabel: 'font-size:10.5pt;font-weight:bold;color:#555555;',
-  qSub: 'font-size:8pt;font-weight:bold;color:#989eb8;text-transform:uppercase;',
-  qType: 'font-size:8.5pt;color:#6b7280;',
-  colHead: 'padding:4pt 9pt;border:1px solid #dddddd;background:#fafafa;'
-    + 'font-size:8.5pt;font-weight:bold;color:#5a6079;text-transform:uppercase;',
-  colCell: 'padding:6pt 9pt;border:1px solid #dddddd;vertical-align:top;font-size:10pt;',
-  helper: 'font-size:8pt;color:#989eb8;padding-top:4pt;',
-  refCell: 'padding:4pt 9pt;border:1px solid #dddddd;background:#f5f5f5;font-size:8.5pt;color:#5a6079;',
-  optOn: 'background:#e8f1fa;font-weight:bold;',
-  optAdded: 'background:#d9f7ec;',
-  optRemoved: 'background:#fde3e3;text-decoration:line-through;',
-  fieldChanged: 'background:#fdf0d2;',
-  empty: 'color:#909090;font-style:italic;',
-};
-
-function buildExportHtml() {
-  const sections = visibleSections();
-  const shown = sections.reduce((n, s) => n + s.questions.length, 0);
-  const total = allQuestions().length;
-
-  const filterNote = [];
-  if (view.filter !== 'all') filterNote.push(`filter: ${view.filter}`);
-  if (view.search.trim()) filterNote.push(`search: "${view.search.trim()}"`);
-  const scope = shown === total
-    ? `All ${total} question${total === 1 ? '' : 's'}`
-    : `${shown} of ${total} questions (${filterNote.join(', ')})`;
-
-  const m = view.meta;
-  const metaRows = [
-    ['Form', m.formName || '-'],
-    ['Survey number', m.surveyNumber || '-'],
-    ['Survey type', m.surveyType || '-'],
-    ['Location', m.address || '-'],
-    ['Result ID', m.resultId || '-'],
-    ['Generated', formatTimestamp(m.generatedAt)],
-    ['Scope', scope],
-  ].map(([k, v]) => `<tr><td style="${X.metaKey}">${escapeHtml(k)}</td>`
-    + `<td style="${X.metaVal}">${escapeHtml(v)}</td></tr>`).join('');
-
-  const body = sections.map((s) => `
-    <div style="${X.section}">${escapeHtml(s.text || 'General')}</div>
-    ${s.questions.map(exportQuestion).join('')}
-  `).join('');
-
-  // The mso <xml> block sets Word's default view and page setup; landscape
-  // because three answer columns do not fit a portrait A4 text column.
-  return `<html xmlns:o="urn:schemas-microsoft-com:office:office"
-      xmlns:w="urn:schemas-microsoft-com:office:word"
-      xmlns="http://www.w3.org/TR/REC-html40">
-<head>
-<meta charset="utf-8" />
-<title>SmartFill Answer Comparison</title>
-<!--[if gte mso 9]><xml>
-  <w:WordDocument><w:View>Print</w:View><w:Zoom>100</w:Zoom></w:WordDocument>
-</xml><![endif]-->
-<style>
-  @page { size: 29.7cm 21cm; mso-page-orientation: landscape; margin: 1.2cm; }
-  body { ${X.page} }
-  table { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
-</style>
-</head>
-<body style="${X.page}">
-  <div style="${X.h1}">SmartFill — Answer Comparison</div>
-  <div style="${X.sub}">Current form value versus the AI suggestions, question by question.</div>
-  <table style="${X.metaTable}"><tbody>${metaRows}</tbody></table>
-  ${body || '<p style="' + X.empty + '">No questions matched the current view.</p>'}
-</body>
-</html>`;
-}
-
-function exportQuestion(q) {
-  const cols = columnsFor(q);
-  const currentSet = toSelectedSet(q.currentAnswer);
-  const width = Math.floor(100 / cols.length);
-  const status = q.matchesCurrent ? 'MATCHES' : 'DIFFERENT';
-
-  const headRow = cols.map((c) =>
-    `<td style="${X.colHead}" width="${width}%">${escapeHtml(c.title)}</td>`).join('');
-
-  const bodyRow = cols.map((c) => `
-    <td style="${X.colCell}" width="${width}%">
-      ${exportControl(q, c, currentSet)}
-      <div style="${X.helper}">${escapeHtml(c.helper)}</div>
-    </td>`).join('');
-
-  const refs = exportRefs(q);
-
-  return `
-    <table style="${X.qTable}"><tbody>
-      <tr><td style="${X.qHead}" colspan="${cols.length}">
-        ${q.subheader ? `<div style="${X.qSub}">${escapeHtml(q.subheader)}</div>` : ''}
-        <div style="${X.qLabel}">${escapeHtml(q.questionText || '(no label)')}</div>
-        <div style="${X.qType}">${escapeHtml(TYPE_LABEL[q.inputType] || q.inputType || 'Text')} &middot; ${status}</div>
-      </td></tr>
-      <tr>${headRow}</tr>
-      <tr>${bodyRow}</tr>
-      ${refs ? `<tr><td style="${X.refCell}" colspan="${cols.length}">${refs}</td></tr>` : ''}
-    </tbody></table>`;
-}
-
-/**
- * Word has no reliable way to draw an unchecked radio through CSS, so the
- * export swaps the drawn glyphs for the Unicode ones Word renders natively
- * in its default fonts. Same information, no font dependency beyond what
- * Word already ships.
- */
-function exportControl(q, col, currentSet) {
-  if (!isChoice(q.inputType)) {
-    const text = formatAnswer(col.value);
-    const changed = col.kind !== 'current'
-      && keyOf(text) !== keyOf(formatAnswer(q.currentAnswer));
-    const style = changed ? X.fieldChanged : '';
-    if (!text) return `<div style="${X.empty}">No answer</div>`;
-    return `<div style="${style}white-space:pre-wrap;">${escapeHtml(text)}</div>`;
-  }
-
-  const isCurrent = col.kind === 'current';
-  const selected = toSelectedSet(col.value);
-  const on = q.inputType === 'checkbox' ? '&#9745;' : '&#9679;';   // ☑ / ●
-  const off = q.inputType === 'checkbox' ? '&#9744;' : '&#9675;';  // ☐ / ○
-
-  const options = Array.isArray(q.options) ? q.options : [];
-  const known = new Set(options.map((o) => keyOf(o.label)));
-
-  const rows = options.map((opt) => {
-    const k = keyOf(opt.label);
-    const picked = selected.has(k);
-    let style = picked ? X.optOn : '';
-    if (!isCurrent) {
-      if (picked && !currentSet.has(k)) style = X.optOn + X.optAdded;
-      else if (!picked && currentSet.has(k)) style = X.optRemoved;
-    }
-    return `<div style="${style}padding:1pt 3pt;">${picked ? on : off} ${escapeHtml(opt.label)}</div>`;
-  });
-
-  const extras = [];
-  labelsOf(col.value).forEach((label, k) => {
-    if (!known.has(k)) {
-      extras.push(`<div style="${X.optOn}${X.optAdded}padding:1pt 3pt;">`
-        + `${on} ${escapeHtml(label)} <i>(not an option)</i></div>`);
-    }
-  });
-
-  if (rows.length === 0 && extras.length === 0) return `<div style="${X.empty}">No answer</div>`;
-  return rows.join('') + extras.join('');
-}
-
-function exportRefs(q) {
-  const labels = (q.formPass && Array.isArray(q.formPass.sourceLabels)) ? q.formPass.sourceLabels : [];
-  const photos = (q.imagePass && Array.isArray(q.imagePass.sourcePhotoIds)) ? q.imagePass.sourcePhotoIds : [];
-  const bits = [];
-  if (labels.length) bits.push('Pages consulted: ' + labels.map((l) => escapeHtml(l)).join(', '));
-  if (photos.length) bits.push(`Source images: ${photos.length}`);
-  return bits.join(' &nbsp;·&nbsp; ');
+  return `SmartFill-Answer-Comparison${survey}-${stamp}`;
 }

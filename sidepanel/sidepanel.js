@@ -100,12 +100,20 @@ const els = {
   imgGalleryCard: $('img-gallery-card'),
   imgGallery: $('img-gallery'),
 
+  usageCard: $('usage-card'),
+  usageFigure: $('usage-figure'),
+  usageFill: $('usage-fill'),
+  usageDetail: $('usage-detail'),
+
   imgFooter: $('img-footer'),
   btnDescribe: $('btn-img-describe'),
 
   imgStatusCard: $('img-status-card'),
   imgStatusTitle: $('img-status-title'),
   imgStatusBody: $('img-status-body'),
+
+  quotaGate: $('quota-gate'),
+  quotaGateDismiss: $('quota-gate-dismiss'),
 
   // ── Shared chrome ───────────────────────────────────────────────
   activityList: $('activity-list'),
@@ -2782,6 +2790,8 @@ function hidePhotoUi() {
   els.imgToolbarCard.style.display = 'none';
   els.imgGalleryCard.style.display = 'none';
   els.imgFooter.style.display = 'none';
+  // The allowance is only meaningful next to the button that spends it.
+  if (els.usageCard) els.usageCard.style.display = 'none';
 }
 
 function showPhotoUi() {
@@ -2789,6 +2799,9 @@ function showPhotoUi() {
   els.imgGalleryCard.style.display = 'block';
   els.imgFooter.style.display = 'block';
   els.imgStatusCard.style.display = 'none';
+  // Not awaited: the gallery must not wait on the LMS to appear. The meter
+  // shows itself when the figure arrives, and stays hidden if it doesn't.
+  refreshUsageMeter();
 }
 
 function extractImages() {
@@ -2980,6 +2993,158 @@ async function reportImageUsageSafely(imageCount) {
   }
 }
 
+// ── Image allowance: the meter, and the gate it feeds ────────────────
+//
+// Two separate things share one source of truth (GET /external/usage, which
+// reads the standing without incrementing it):
+//
+//   · The meter above the CTA - ambient, refreshed whenever the Images
+//     subpanel becomes relevant and after every run.
+//   · The zero-remaining gate - checked at the moment of the click, not
+//     read off the meter. The meter can be minutes stale, and the same
+//     licence can be spent from another device between a refresh and a
+//     press, so the gate re-reads.
+//
+// Note the deliberate asymmetry with reportImageUsageSafely(), which never
+// blocks: recording usage is best-effort because a metering outage must not
+// cost an inspector their upload, but a CONFIRMED zero is a different fact -
+// the licence really is spent, and sending the batch anyway would do work
+// the customer has not paid for. A failed or unavailable check is not a
+// confirmed zero, so it lets the run proceed.
+
+/**
+ * Read the licence standing without spending anything.
+ * Returns { consumed, max, remaining } or null on any failure.
+ */
+async function fetchUsageStanding() {
+  try {
+    if (!window.NSR_LMS_USAGE) return null;
+    const res = await window.NSR_LMS_USAGE.getUsage();
+    if (!res || !res.ok) {
+      console.warn('[SmartFill] Could not read image allowance:', res && (res.kind || 'unknown'));
+      return null;
+    }
+    const max = Number(res.max);
+    const consumed = Number(res.consumed);
+    // `remaining` is the server's own figure and is authoritative - it is
+    // what the licence will actually allow. It is only derived here when
+    // the field is absent, which older LMS builds do.
+    const remaining = Number.isFinite(Number(res.remaining))
+      ? Number(res.remaining)
+      : (Number.isFinite(max) && Number.isFinite(consumed) ? max - consumed : NaN);
+
+    if (!Number.isFinite(remaining)) return null;
+    return {
+      consumed: Number.isFinite(consumed) ? consumed : 0,
+      max: Number.isFinite(max) ? max : 0,
+      remaining: Math.max(0, remaining),
+    };
+  } catch (err) {
+    console.warn('[SmartFill] Image allowance lookup threw:', err);
+    return null;
+  }
+}
+
+/**
+ * Refresh the meter above the image CTA.
+ *
+ * Hidden rather than shown-as-unknown when the figure cannot be read: a
+ * quota widget that cannot state a quota is worse than no widget, and the
+ * gate below will still do the right thing at click time.
+ */
+async function refreshUsageMeter() {
+  renderUsageMeter(await fetchUsageStanding());
+}
+
+/**
+ * Paint the meter from an already-read standing.
+ *
+ * Split out so the post-upload refresh can use the figures POST
+ * /external/usage just returned, instead of spending a second round trip on
+ * a GET that would race the write it is trying to reflect.
+ */
+function renderUsageMeter(standing) {
+  if (!els.usageCard) return;
+
+  if (!standing) {
+    els.usageCard.style.display = 'none';
+    return;
+  }
+
+  const { consumed, max, remaining } = standing;
+  // An unlimited or unset licence reports max 0. There is no bar to draw
+  // for "no ceiling", and a 100%-full bar would read as exhausted, so the
+  // meter stays out of the way.
+  if (!max) {
+    els.usageCard.style.display = 'none';
+    return;
+  }
+
+  const pct = Math.min(100, Math.max(0, (consumed / max) * 100));
+  els.usageFigure.textContent = `${consumed.toLocaleString()} / ${max.toLocaleString()}`;
+  els.usageFill.style.width = pct.toFixed(1) + '%';
+
+  const empty = remaining <= 0;
+  // 10% of the allowance, floored at 25 images, so a small licence still
+  // gets a warning with enough headroom to act on it.
+  const low = !empty && remaining <= Math.max(25, Math.round(max * 0.1));
+
+  els.usageCard.classList.toggle('is-empty', empty);
+  els.usageCard.classList.toggle('is-low', low);
+
+  if (empty) {
+    els.usageDetail.textContent =
+      'No images remaining. Renew your subscription to run the AI pipeline.';
+  } else {
+    els.usageDetail.textContent =
+      `${remaining.toLocaleString()} image${remaining === 1 ? '' : 's'} remaining`
+      + (low ? ' - running low.' : '.');
+  }
+
+  els.usageCard.style.display = 'block';
+}
+
+/**
+ * The click-time check. Resolves true when the pipeline may run.
+ *
+ * Only a confirmed zero stops it. A null reading means the LMS could not be
+ * asked - no key, no network, an older build without the endpoint - and
+ * refusing on that would turn an LMS outage into a total outage for every
+ * inspector in the field.
+ */
+async function hasImageAllowance() {
+  const standing = await fetchUsageStanding();
+  if (!standing) return true;
+  if (!standing.max) return true;          // unlimited / unset licence
+  return standing.remaining > 0;
+}
+
+function showQuotaGate() {
+  if (!els.quotaGate) return;
+  els.quotaGate.hidden = false;
+  if (els.quotaGateDismiss) els.quotaGateDismiss.focus();
+}
+
+function hideQuotaGate() {
+  if (els.quotaGate) els.quotaGate.hidden = true;
+}
+
+if (els.quotaGateDismiss) {
+  els.quotaGateDismiss.addEventListener('click', hideQuotaGate);
+}
+if (els.quotaGate) {
+  // Click-outside and Escape both close it. This dialog reports a condition
+  // rather than asking for a decision, so trapping the user in it buys
+  // nothing - the gate that matters is the one in displayDescriptions(),
+  // which re-checks on every press regardless of what happened here.
+  els.quotaGate.addEventListener('click', (e) => {
+    if (e.target === els.quotaGate) hideQuotaGate();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !els.quotaGate.hidden) hideQuotaGate();
+  });
+}
+
 /**
  * The licence id this install currently holds, or '' when there isn't one.
  *
@@ -3124,6 +3289,31 @@ async function displayDescriptions() {
     return;
   }
 
+  // ── Licence gate ─────────────────────────────────────────────────
+  // Checked here and not read off the meter: the meter can be minutes old,
+  // and the same licence can be spent from another device in between. Done
+  // before the download loop rather than just before the POST, so an
+  // exhausted licence doesn't first pull ~50 full-resolution images over
+  // the network for a batch that will never be sent.
+  //
+  // The button is re-enabled on the way out because nothing was started -
+  // isImagesProcessing has not been set yet, so the early return below
+  // leaves the UI exactly as it found it.
+  els.btnDescribe.disabled = true;
+  let allowed = true;
+  try {
+    allowed = await hasImageAllowance();
+  } finally {
+    els.btnDescribe.disabled = false;
+  }
+
+  if (!allowed) {
+    showQuotaGate();
+    logActivity('Image pipeline blocked: licence has no images remaining', 'error');
+    refreshUsageMeter();
+    return;
+  }
+
   state.isImagesProcessing = true;
   els.btnDescribe.disabled = true;
 
@@ -3252,7 +3442,20 @@ async function displayDescriptions() {
     // processed. Deliberately not awaited into the critical path's success:
     // quota is a meter, not a gate, and a metering failure must never cost
     // the inspector their photo upload. Failures are logged, not surfaced.
-    await reportImageUsageSafely(validCount);
+    //
+    // The response carries the post-write standing, so the meter is updated
+    // from it directly - a GET here would race the write it is meant to
+    // reflect. On a metering failure the meter is left showing the last
+    // reading rather than being blanked; it is refreshed again when the
+    // Images panel is next shown.
+    const meterRes = await reportImageUsageSafely(validCount);
+    if (meterRes) {
+      renderUsageMeter({
+        consumed: Number(meterRes.consumed) || 0,
+        max: Number(meterRes.max) || 0,
+        remaining: Math.max(0, Number(meterRes.remaining) || 0),
+      });
+    }
 
     const response = await fetch(IMAGES_API, {
       method: 'POST',
@@ -3422,6 +3625,13 @@ function buildComparisonPayload() {
   const sections = [];
   let current = null;
 
+  // Resolved once for the whole payload. The report tab is not on LC360 and
+  // has no idea how a photo URL is shaped, so the URLs are built here and
+  // travel with the data rather than being reconstructed over there.
+  // Snapshotted caseId first, for the same reason renderSourcePhotosHtml()
+  // prefers it: the links must not drift when the active tab changes.
+  const caseId = state.caseId || extractCaseId(d.url || '');
+
   state.entries.forEach((entry) => {
     const q = entry.question || {};
     const sectionText = entry.sectionText || 'General';
@@ -3454,9 +3664,12 @@ function buildComparisonPayload() {
       imagePass: entry.imagePass
         ? {
           answer: entry.imagePass.aiAnswer,
-          sourcePhotoIds: Array.isArray(entry.imagePass.aiSourcePhotoIds)
-            ? entry.imagePass.aiSourcePhotoIds
-            : [],
+          // Each evidence photo as { id, url, thumbUrl }. `url` is the
+          // original; `thumbUrl` is the same handler at 150px, which is what
+          // the page's own gallery uses. Both need the reader's LC360 session
+          // cookie, so they only resolve for someone already signed in there -
+          // which is every intended reader of this report.
+          sourcePhotos: buildComparisonPhotos(caseId, entry.imagePass.aiSourcePhotoIds),
         }
         : null,
       mode: entry.mode,
@@ -3477,10 +3690,31 @@ function buildComparisonPayload() {
       address: (d.generalInfo && d.generalInfo.address) || '',
       pageUrl: d.url || '',
       resultId: state.resultId || '',
+      caseId,
       generatedAt: new Date().toISOString(),
     },
     sections,
   };
+}
+
+/**
+ * Turn an aiSourcePhotoIds array into the { id, url, thumbUrl } records the
+ * comparison report links to.
+ *
+ * Returns [] when there is no caseId: a photo URL without an inspectionID is
+ * a 404, and an empty list makes the report omit the Photos row entirely
+ * rather than print dead links under it.
+ */
+function buildComparisonPhotos(caseId, photoIds) {
+  if (!caseId || !Array.isArray(photoIds)) return [];
+  return photoIds
+    .filter((pid) => typeof pid === 'string' && pid.trim() !== '')
+    .map((pid) => ({
+      id: pid,
+      url: buildPhotoHandlerUrl(caseId, pid),
+      thumbUrl: buildPhotoHandlerUrl(caseId, pid, 150),
+    }))
+    .filter((p) => p.url);
 }
 
 /**
