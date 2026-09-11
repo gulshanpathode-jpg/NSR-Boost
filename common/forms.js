@@ -30,26 +30,51 @@
   // That makes it available on every form page rather than only on General
   // Information (see page/dynforms-agent.js → surveyType()).
   //
-  // Confirmed live on survey 22035: the engine reports "WKFC Property Standard"
-  // verbatim on both WKFC Cover and WKFC: Core Revised, and the General
-  // Information grid's "Survey Type" row carries the identical string. The
-  // filter in matchForm() is therefore a hard gate, not advisory - see
+  // Confirmed live on survey 22035: the engine reports the survey type
+  // verbatim on both Cover and Core Revised, and the General Information
+  // grid's "Survey Type" row carries the identical string. The filter in
+  // matchForm() is therefore a hard gate, not advisory - see
   // isSupportedSurveyType().
+  //
+  // The tenant renamed this survey type from "WKFC Property Standard" to
+  // "SmartFill Property Standard" (one word - verified live on survey 22399,
+  // both on the engine's inspectionType and in the GI grid's "Survey Type"
+  // row). The customer and division were renamed to "SmartFill" in the same
+  // pass, and the inspection-type list carries exactly one "Property Standard"
+  // entry, so no survey reports the old string any more.
+  //
+  // WKFC is nevertheless kept as a legacy alias. It costs one comparison and
+  // covers any survey or tenant still on the pre-rename record; drop it once
+  // that is known to be impossible.
   const SURVEY_TYPES = {
+    SMARTFILL: 'SmartFill Property Standard',
     WKFC: 'WKFC Property Standard',
   };
 
+  // Every type in the registry, as one human-readable string for the
+  // "not supported" copy. Derived rather than hard-coded so adding a survey
+  // type above does not leave stale wording behind in three files.
+  const SUPPORTED_SURVEY_LABEL = Object.values(SURVEY_TYPES).join(' / ');
+
   const SUPPORTED_FORMS = [
     {
-      name: 'WKFC: Core Revised',
-      shortName: 'WKFC Core Revised',
-      titleHint: 'WKFC: Core Revised',
+      name: 'SmartFill: Core Revised',
+      shortName: 'SmartFill Core Revised',
+      // Renamed from "WKFC: Core Revised". The old title stays as an alias so
+      // a survey still carrying it keeps detecting - see matchForm().
+      titleHints: ['SmartFill: Core Revised', 'WKFC: Core Revised'],
       flow: 'verify',
       kind: 'form',
-      surveyTypes: [SURVEY_TYPES.WKFC],
+      surveyTypes: [SURVEY_TYPES.SMARTFILL, SURVEY_TYPES.WKFC],
       // Cross-check: every one of these headings must be present among the
       // page's .dyn-mainSection-title elements. Guards against a title-only
       // match on a differently-built form that happens to share a name.
+      //
+      // Unaffected by the SmartFill rename - re-verified live on survey 22399,
+      // where the page renders "Operations/Occupancy", "1 Building
+      // Information", "Common Hazards/Building Services & Utilities" and
+      // "Protection/Security (Public & Private)". The match is substring-based,
+      // which is what absorbs the numeric prefixes and the parenthetical.
       sectionSignature: [
         'Operations/Occupancy',
         'Building Information',
@@ -71,23 +96,26 @@
       // of free-text fields. The whitelist below is what actually exists on
       // the page; whether the backend wants these keys is an open question -
       // see docs/PLATFORM-ANALYSIS.md §8.
-      name: 'WKFC Cover',
-      shortName: 'WKFC Cover',
-      titleHint: 'WKFC Cover',
+      name: 'SmartFill Cover',
+      shortName: 'SmartFill Cover',
+      // Renamed from "WKFC Cover"; old title kept as an alias.
+      titleHints: ['SmartFill Cover', 'WKFC Cover'],
       flow: 'knowledge_base',
       pageType: 'cover',
       kind: 'form_text_dict',
-      surveyTypes: [SURVEY_TYPES.WKFC],
+      surveyTypes: [SURVEY_TYPES.SMARTFILL, SURVEY_TYPES.WKFC],
       sectionSignature: ['Survey Information', 'General Information'],
       // The NSR_LMS cover contract, unchanged: these five and nothing else.
       //
       // toTextDict() emits only the entries it actually finds on the page, so a
       // label absent from this survey's cover is left out of the payload
-      // entirely rather than sent empty. On BoostUSA today that means exactly
-      // one key ships - "Underwriter concerns / Inspection comments" - because
-      // the other four narratives do not exist on this cover. They stay listed
-      // so they flow through automatically on any tenant or future cover
-      // revision that does carry them.
+      // entirely rather than sent empty.
+      //
+      // ⚠ This changed with the SmartFill rebuild of the cover. It used to
+      // ship exactly one key ("Underwriter concerns / Inspection comments"),
+      // the other four narratives being absent from the form. Re-verified live
+      // on survey 22399: all five now exist, so all five ship. The list below
+      // is unchanged - what changed is how much of it resolves.
       //
       // The BoostUSA-specific narratives (Areas Reviewed, Opinion of Risk,
       // Comment) were deliberately REMOVED: they are real content on this
@@ -127,9 +155,9 @@
       kind: 'generic_fields',
       isGeneralInfo: true,
       // GI looks identical across survey types, so it needs the same
-      // restriction as the forms - otherwise a non-WKFC survey's GI page would
-      // still be treated as supported.
-      surveyTypes: [SURVEY_TYPES.WKFC],
+      // restriction as the forms - otherwise an unrelated survey's GI page
+      // would still be treated as supported.
+      surveyTypes: [SURVEY_TYPES.SMARTFILL, SURVEY_TYPES.WKFC],
       // The full NSR_LMS WKFC knowledge-base whitelist. All eleven generic
       // fields exist on BoostUSA, in the "Extra Info" panel (#genFieldSection)
       // rather than the survey grid - see readPairs() in
@@ -164,6 +192,21 @@
     return String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
   }
 
+  /**
+   * A form's accepted page titles, lowercased.
+   *
+   * `titleHints` carries the current title first and any superseded ones
+   * after it, so a rename on the platform side does not strand surveys that
+   * still render the old header. `titleHint` (singular) is still honoured for
+   * an entry that only ever had one.
+   */
+  function titleHintsOf(form) {
+    const hints = Array.isArray(form.titleHints) && form.titleHints.length
+      ? form.titleHints
+      : [form.titleHint];
+    return hints.filter(Boolean).map((h) => normalize(h).toLowerCase());
+  }
+
   /** Could this hostname host a BoostUSA DynForms page at all? */
   function isBoostHost(hostname) {
     return hostname === 'boostusa.losscontrol360.com';
@@ -177,10 +220,10 @@
   /**
    * Is this survey type one the extension supports?
    *
-   * NSR-Boost is deliberately scoped to **WKFC Property Standard only**. Any
-   * other survey type is rejected outright rather than falling through to a
-   * title match, so a Brownstone or Condos survey that happens to carry a
-   * similarly-named form can never be picked up.
+   * Boost USA is deliberately scoped to the survey types in SURVEY_TYPES and
+   * nothing else. Any other survey type is rejected outright rather than
+   * falling through to a title match, so a Brownstone or Condos survey that
+   * happens to carry a similarly-named form can never be picked up.
    *
    * An empty type means the page did not report one (e.g. the engine had not
    * loaded yet). That is treated as unknown, not as a pass.
@@ -212,14 +255,14 @@
         form: null,
         matched: false,
         reason: type
-          ? `Survey type "${type}" is not supported. This build handles ${SURVEY_TYPES.WKFC} only.`
+          ? `Survey type "${type}" is not supported. This build handles ${SUPPORTED_SURVEY_LABEL} only.`
           : 'Survey type could not be determined for this page.',
         surveyTypeRejected: true,
       };
     }
 
     for (const form of SUPPORTED_FORMS) {
-      if (!t.includes(form.titleHint.toLowerCase())) continue;
+      if (!titleHintsOf(form).some((hint) => t.includes(hint))) continue;
 
       // Per-form survey-type restriction, on top of the global gate above.
       if (Array.isArray(form.surveyTypes) && form.surveyTypes.length) {
@@ -304,6 +347,7 @@
 
   const api = {
     SURVEY_TYPES,
+    SUPPORTED_SURVEY_LABEL,
     SUPPORTED_FORMS,
     isBoostHost,
     isLossControlHost,

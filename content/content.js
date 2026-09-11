@@ -40,7 +40,7 @@
         return {
           supported: false,
           reason: type
-            ? `Survey type "${type}" is not supported. This build handles ${FORMS.SURVEY_TYPES.WKFC} only.`
+            ? `Survey type "${type}" is not supported. This build handles ${FORMS.SUPPORTED_SURVEY_LABEL} only.`
             : 'Survey type could not be read from this page.',
           caseTypeName: type,
           surveyTypeRejected: true,
@@ -298,7 +298,7 @@
       return {
         supported: false,
         reason: surveyType
-          ? `Survey type "${surveyType}" is not supported. This build handles ${FORMS.SURVEY_TYPES.WKFC} only.`
+          ? `Survey type "${surveyType}" is not supported. This build handles ${FORMS.SUPPORTED_SURVEY_LABEL} only.`
           : 'Survey type could not be determined for this page.',
         surveyTypeRejected: true,
       };

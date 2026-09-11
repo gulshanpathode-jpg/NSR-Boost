@@ -72,13 +72,12 @@ const els = {
   countRejected: $('count-rejected'),
   btnRejectAll: $('btn-reject-all'),
   btnAcceptAll: $('btn-accept-all'),
+  btnCompare: $('btn-compare'),
   btnRefresh: $('btn-refresh'),
+  btnDashboard: $('btn-dashboard'),
   suggestionList: $('suggestion-list'),
   btnSendFeedback: $('btn-send-feedback'),
 
-  warningCard: $('warning-card'),
-  warningBody: $('warning-body'),
-  supportedList: $('supported-list'),
 
   filterCountAll: $('filter-count-all'),
   filterCountDifferent: $('filter-count-different'),
@@ -202,14 +201,14 @@ const state = {
 };
 
 const STATUS_DESCRIPTIONS = {
-  idle: 'Open a supported NSR form to begin.',
+  idle: 'Open a supported Boost USA form to begin.',
   ready: 'Ready to sync the current form.',
   scraping: 'Reading questions from the page…',
   uploading: 'Processing...',
   analyzing: 'Matching AI answers to questions…',
   complete: 'AI analysis complete. Review answers below.',
   error: 'Something went wrong - see details below.',
-  unsupported: 'This page is not a supported NSR form.',
+  unsupported: 'This page is not a supported Boost USA form.',
 };
 
 // ═════════════════════════════════════════════════════════════════════
@@ -381,6 +380,16 @@ async function openUrlBesideTab(url, logLabel) {
   } catch (e) {
     showToast('Could not open tab: ' + e.message);
   }
+}
+
+// The Boost USA web dashboard. Lives in Config rather than the header so it
+// sits with the other install-level settings, not the per-page actions.
+const DASHBOARD_URL = 'https://dashboard.boost-usa.com/dashboard/login';
+
+if (els.btnDashboard) {
+  els.btnDashboard.addEventListener('click', () => {
+    openUrlBesideTab(DASHBOARD_URL, 'Opened Boost USA dashboard');
+  });
 }
 
 function openAddressInGoogle() {
@@ -583,7 +592,6 @@ function renderFormDetection(d) {
     els.detectionName.textContent = f.form.name;
     els.detectionBadge.textContent = 'SUPPORTED';
     els.detectionBadge.className = 'badge badge-success';
-    els.warningCard.style.display = 'none';
     if (!busy) {
       els.btnSync.disabled = false;
       setStatusBadge('READY', 'idle');
@@ -596,26 +604,6 @@ function renderFormDetection(d) {
     els.detectionName.textContent = 'Unsupported page';
     els.detectionBadge.textContent = 'NOT SUPPORTED';
     els.detectionBadge.className = 'badge badge-warning';
-    renderSupportedList(d);
-    els.warningCard.style.display = 'block';
-
-    // Surface the detected case type alongside the header so the inspector
-    // can tell *why* a page is unsupported: a header we don't know vs. a
-    // known header gated out by the page's case type.
-    const ctName = (d && d.caseTypeName)
-      || (f && f.caseTypeName)
-      || '';
-    const ctSuffix = ctName ? ` (case type: "${ctName}")` : '';
-
-    let body;
-    if (f?.reason === 'Unsupported form' && f.detectedHeader) {
-      body = `Detected form header: "${f.detectedHeader}"${ctSuffix} - this is not in the supported list for this case type.`;
-    } else if (f?.reason === 'Form header not found on page') {
-      body = 'No form header (.mainSectionHeaderLabel) was found. Make sure the form is fully loaded.';
-    } else {
-      body = `The current tab is not a recognized NSR form page (${f?.reason || 'unknown'})${ctSuffix}.`;
-    }
-    els.warningBody.textContent = body;
     // Disabling is always safe - it is the direction that prevents a second
     // concurrent run. The badge and label are not: overwriting them mid-run
     // replaces "IN PROGRESS" with "UNSUPPORTED" for a run that is still going.
@@ -675,165 +663,6 @@ function renderImagesDetection(d) {
   renderSurveyType(d);
 }
 
-// Human-readable flow descriptions for the supported-forms list. Keeps the
-// UI copy in one place instead of scattering strings through the renderer.
-const FLOW_LABELS = {
-  verify: 'AI review (Accept / Reject queue)',
-  knowledge_base: 'Save to SmartFill',
-  kb_then_verify: 'Save to SmartFill, then AI review',
-};
-
-/**
- * Render the "Supported forms" list inside the Unsupported-page warning.
- *
- * Registry-driven: reads window.NSR_FORMS.SUPPORTED_FORMS so the list always
- * matches what the extension can actually detect - add a form to the registry
- * and it shows up here automatically, no second edit needed.
- *
- * Case-type-aware: the LC360 page carries a `Utilant.CaseTypeName`. When we
- * know it (passed in via `detection`), each form is tagged as either
- * applicable to THIS page's case type ("on this page") or belonging to a
- * different case type ("other case type"), so the inspector can see at a
- * glance why the current page isn't matching.
- *
- * @param {object} [detection] - the current page detection blob. Optional;
- *        when omitted (cold start) the full registry is shown ungrouped.
- */
-function renderSupportedList(detection) {
-  if (!els.supportedList) return;
-  els.supportedList.innerHTML = '';
-
-  const FORMS = (typeof window !== 'undefined' && window.NSR_FORMS) || null;
-
-  // Fallback: registry not loaded (shouldn't happen now that forms.js is
-  // included before sidepanel.js, but keep the panel functional regardless).
-  if (!FORMS || !Array.isArray(FORMS.SUPPORTED_FORMS)) {
-    [
-      'WKFC Cover',
-      'WKFC: Core Revised',
-      'General Information',
-      'Dual: Habitational Property Form',
-    ].forEach((name) => {
-      const li = document.createElement('li');
-      li.textContent = name;
-      els.supportedList.appendChild(li);
-    });
-    return;
-  }
-
-  // The case type the current page reports, if any. Empty string when it
-  // couldn't be scraped (older page, or Utilant.CaseTypeName missing).
-  const currentCaseType =
-    (detection && detection.caseTypeName)
-    || (detection && detection.form && detection.form.caseTypeName)
-    || (detection && detection.images && detection.images.meta && detection.images.meta.surveyType)
-    || '';
-  const currentCt = currentCaseType.replace(/\s+/g, ' ').trim();
-
-  // The form header the page actually rendered (drives "matched here").
-  const detectedHeader =
-    (detection && detection.form && detection.form.detectedHeader) || '';
-  const detectedHeaderLc = detectedHeader.replace(/\s+/g, ' ').trim().toLowerCase();
-
-  // Group the registry by survey type. A form with no `surveyTypes` array is
-  // universal; we label it "Any case type".
-  //
-  // NOTE: the registry key is `surveyTypes` on BoostUSA, not NSR_LMS's
-  // `caseTypes`. Reading the old key here made every entry look universal, so
-  // the whole list rendered under "Any case type" instead of
-  // "WKFC Property Standard".
-  const groups = new Map(); // surveyTypeLabel -> [forms]
-  const UNIVERSAL = 'Any case type';
-  FORMS.SUPPORTED_FORMS.forEach((form) => {
-    const cts = Array.isArray(form.surveyTypes) && form.surveyTypes.length
-      ? form.surveyTypes
-      : [UNIVERSAL];
-    cts.forEach((ct) => {
-      if (!groups.has(ct)) groups.set(ct, []);
-      groups.get(ct).push(form);
-    });
-  });
-
-  // Order: the current page's case type first (so the relevant forms are at
-  // the top), then the rest alphabetically, with universal forms last.
-  const groupKeys = Array.from(groups.keys()).sort((a, b) => {
-    if (currentCt && a === currentCt) return -1;
-    if (currentCt && b === currentCt) return 1;
-    if (a === UNIVERSAL) return 1;
-    if (b === UNIVERSAL) return -1;
-    return a.localeCompare(b);
-  });
-
-  groupKeys.forEach((ct) => {
-    const applicableNow = !currentCt || ct === currentCt || ct === UNIVERSAL;
-
-    // Group heading row (the case-type name + an applicability hint).
-    const headLi = document.createElement('li');
-    headLi.className = 'supported-group' + (applicableNow ? ' is-active' : '');
-    const ctName = document.createElement('span');
-    ctName.className = 'supported-group-name';
-    ctName.textContent = ct;
-    headLi.appendChild(ctName);
-    if (currentCt) {
-      const tag = document.createElement('span');
-      tag.className = 'supported-group-tag ' + (applicableNow ? 'tag-here' : 'tag-other');
-      tag.textContent = applicableNow ? 'this page' : 'other case type';
-      headLi.appendChild(tag);
-    }
-    els.supportedList.appendChild(headLi);
-
-    // Forms within the group.
-    groups.get(ct).forEach((form) => {
-      const li = document.createElement('li');
-      li.className = 'supported-form';
-
-      const nameWrap = document.createElement('span');
-      nameWrap.className = 'supported-form-name';
-      nameWrap.textContent = form.name || form.shortName || form.formId;
-
-      // Mark the form that actually matched this page's header.
-      const isMatchedHere =
-        applicableNow &&
-        detectedHeaderLc &&
-        (form.titleHint || form.name || '').toLowerCase() &&
-        detectedHeaderLc.includes((form.titleHint || form.name || '').toLowerCase());
-      if (isMatchedHere) {
-        li.classList.add('is-detected');
-        const dot = document.createElement('span');
-        dot.className = 'supported-form-match';
-        dot.textContent = 'detected here';
-        nameWrap.appendChild(dot);
-      }
-
-      const flowEl = document.createElement('span');
-      flowEl.className = 'supported-form-flow';
-      flowEl.textContent = FLOW_LABELS[form.flow] || form.flow || '';
-
-      li.appendChild(nameWrap);
-      li.appendChild(flowEl);
-      els.supportedList.appendChild(li);
-    });
-  });
-
-  // Footer note explaining the case-type gating, shown only when we know the
-  // current case type (so the user understands the "other case type" tags).
-  if (currentCt) {
-    const note = document.createElement('li');
-    note.className = 'supported-note';
-    note.textContent =
-      `This page reports case type "${currentCt}". Only forms for that case type ` +
-      `(plus any-case-type forms) can be detected here.`;
-    els.supportedList.appendChild(note);
-  } else {
-    const note = document.createElement('li');
-    note.className = 'supported-note';
-    note.textContent =
-      'Case type could not be read from this page, so all forms are listed. ' +
-      'If a form still shows unsupported, reload the page after the extension loads.';
-    els.supportedList.appendChild(note);
-  }
-}
-
 function requestDetection() {
   chrome.runtime.sendMessage({ action: 'REQUEST_DETECTION' }).catch(() => { });
 }
@@ -863,7 +692,7 @@ function requestDetection() {
 /**
  * Same-page test, tolerant of the registry not being loaded. forms.js is
  * included before this file so the fallback should never fire, but the panel
- * stays functional if it ever does - matching renderSupportedList's guard.
+ * stays functional if it ever does.
  */
 function isSamePage(a, b) {
   if (window.NSR_FORMS && typeof window.NSR_FORMS.samePage === 'function') {
@@ -962,7 +791,7 @@ els.btnSync.addEventListener('click', startPipeline);
 
 function startPipeline() {
   if (!state.detection?.form?.supported) {
-    showToast('This page is not a supported NSR form');
+    showToast('This page is not a supported Boost USA form');
     return;
   }
   state.pipeline = 'scraping';
@@ -1213,7 +1042,6 @@ function handlePipelineSuccess(resp) {
   setStatusBadge('COMPLETE', 'success');
   els.statusDesc.textContent = STATUS_DESCRIPTIONS.complete;
   els.canvasTitle.textContent = 'Analysis complete';
-  els.canvasSubtitle.textContent = `Review ${resp.aiAnswers.length} AI answers below.`;
   setRingProgress(100);
   setRingSpinning(false);
   setConnection('online', 'Online');
@@ -1231,6 +1059,22 @@ function handlePipelineSuccess(resp) {
   });
 
   state.entries = buildEntries(resp.extracted.sections, state.apiByQuestionId);
+
+  // Count the QUEUE, not the response.
+  //
+  // This used to read `resp.aiAnswers.length`, which is every item the backend
+  // sent back - including the ones buildEntries() drops because neither pass
+  // carries a usable answer (both aiAnswers null). Those rows can never appear
+  // as cards, so the subtitle promised more review work than the queue could
+  // ever show, and it disagreed with the All tab (which has always counted
+  // state.entries). Measured on survey 22399: 73 in the response, 53 in the
+  // queue, the 20-item gap being questions the AI declined to answer.
+  //
+  // restoreFormOutput() already counted state.entries, so the same sentence
+  // changed from 73 to 53 on a tab switch away and back. Both paths now agree.
+  // Must stay AFTER buildEntries() - state.entries is empty before it.
+  els.canvasSubtitle.textContent = `Review ${state.entries.length} AI answers below.`;
+
   renderQueue();
   els.queueCard.style.display = 'block';
   // Feedback can be sent now that Sync finished. We don't gate on
@@ -2353,6 +2197,10 @@ function updateBulkBar() {
   // > form > image), letting the user bulk-confirm AI suggestions at once.
   els.btnRejectAll.style.display = anyPending ? 'inline-flex' : 'none';
   els.btnAcceptAll.style.display = anyPending ? 'inline-flex' : 'none';
+  // Compare is a read-only report, so unlike Accept/Reject-all it stays put
+  // once the queue exists - reviewers still want the side-by-side after
+  // every card has been actioned. It only greys out on an empty queue.
+  if (els.btnCompare) els.btnCompare.disabled = state.entries.length === 0;
 }
 
 function repaintEntry(entry) {
@@ -3535,6 +3383,152 @@ async function openResultsTab(resultsData) {
 }
 
 
+// ─────────────────────────────────────────────────────────────────────
+// 8.14  Answer-comparison report
+// ─────────────────────────────────────────────────────────────────────
+//
+// The queue cards are the *review* surface: one question at a time, in a
+// 360px-wide panel, with the option list left implicit (only the chosen
+// label is shown). That is the right shape for deciding, and the wrong
+// shape for auditing - there is no way to see the question the way the
+// inspector saw it on LC360, and no way to hand the comparison to anyone
+// who doesn't have the extension installed.
+//
+// The comparison report is that second surface. It re-draws every question
+// in the LC360 DynForms idiom (the real option list, rendered as the same
+// radio / checkbox / textbox control the site uses) once per answer source,
+// so the three values line up option-for-option:
+//
+//   Current form value      question.answer     - what LC360 has now
+//   Page / Form suggestion  formPass.aiAnswer   - AI from the form pages
+//   AI suggestion           imagePass.aiAnswer  - AI from the photos
+//
+// Handoff reuses the openResultsTab() contract exactly: stash the payload
+// in chrome.storage.local under a one-shot key, pass the key as the URL
+// fragment, and let the page delete the entry once it has rendered.
+
+/**
+ * Flatten state.entries into the section-grouped, self-contained shape the
+ * comparison page renders. Self-contained matters: the report tab has no
+ * access to state, and the payload outlives this side panel, so everything
+ * it needs to draw a question travels with it.
+ *
+ * state.entries is already in document order (buildEntries walks the
+ * extracted sections in order), so grouping on a section-text change is
+ * enough to rebuild the page's own section structure.
+ */
+function buildComparisonPayload() {
+  const d = state.detection || {};
+  const sections = [];
+  let current = null;
+
+  state.entries.forEach((entry) => {
+    const q = entry.question || {};
+    const sectionText = entry.sectionText || 'General';
+    if (!current || current.text !== sectionText) {
+      current = { text: sectionText, questions: [] };
+      sections.push(current);
+    }
+
+    current.questions.push({
+      uid: entry.uid,
+      questionId: q.questionId || '',
+      questionText: q.questionText || '',
+      inputType: q.inputType || 'text',
+      subheader: entry.subheader || '',
+      // Options carry `selected` as the page had it at scrape time. The
+      // report re-derives selection per column rather than trusting this
+      // flag, but it is kept so the option ORDER stays the page's order.
+      options: Array.isArray(q.options)
+        ? q.options.map((o) => ({ label: o.label, selected: !!o.selected }))
+        : [],
+      currentAnswer: q.answer == null ? (q.inputType === 'checkbox' ? [] : '') : q.answer,
+      formPass: entry.formPass
+        ? {
+          answer: entry.formPass.aiAnswer,
+          sourceLabels: Array.isArray(entry.formPass.aiSourceLabels)
+            ? entry.formPass.aiSourceLabels.filter((x) => typeof x === 'string' && x.trim() !== '')
+            : [],
+        }
+        : null,
+      imagePass: entry.imagePass
+        ? {
+          answer: entry.imagePass.aiAnswer,
+          sourcePhotoIds: Array.isArray(entry.imagePass.aiSourcePhotoIds)
+            ? entry.imagePass.aiSourcePhotoIds
+            : [],
+        }
+        : null,
+      mode: entry.mode,
+      matchesCurrent: !!entry.matchesCurrent,
+      status: entry.status,
+    });
+  });
+
+  return {
+    meta: {
+      formName: (d.form && d.form.form && d.form.form.name) || d.title || 'SmartFill',
+      surveyNumber: state.surveyNumber || '',
+      surveyType:
+        d.caseTypeName
+        || (d.form && d.form.caseTypeName)
+        || (d.images && d.images.meta && d.images.meta.surveyType)
+        || '',
+      address: (d.generalInfo && d.generalInfo.address) || '',
+      pageUrl: d.url || '',
+      resultId: state.resultId || '',
+      generatedAt: new Date().toISOString(),
+    },
+    sections,
+  };
+}
+
+/**
+ * Open the comparison report beside the current tab. Mirrors
+ * openResultsTab(): same one-shot storage key, same "place it to the right
+ * of the tab the user is looking at" placement, same reason for running in
+ * the side panel rather than the service worker (MV3 worker tear-down must
+ * not be able to interrupt the open mid-flight).
+ */
+async function openComparisonTab() {
+  if (state.entries.length === 0) {
+    showToast('Nothing to compare yet - run Sync first');
+    return;
+  }
+
+  const key = 'compare:' + Date.now() + ':' + Math.random().toString(36).slice(2, 8);
+  const payload = buildComparisonPayload();
+
+  try {
+    await chrome.storage.local.set({ [key]: payload });
+
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const createOpts = {
+      url: chrome.runtime.getURL('compare/compare.html') + '#' + encodeURIComponent(key),
+      active: true,
+    };
+    if (activeTab && typeof activeTab.index === 'number') {
+      createOpts.index = activeTab.index + 1;
+      createOpts.openerTabId = activeTab.id;
+    }
+    if (activeTab && typeof activeTab.windowId === 'number') {
+      createOpts.windowId = activeTab.windowId;
+    }
+
+    await chrome.tabs.create(createOpts);
+    logActivity(`Opened comparison report (${state.entries.length} questions)`, 'info');
+  } catch (err) {
+    console.error('[SmartFill] Failed to open comparison tab:', err);
+    showToast('Could not open comparison: ' + err.message);
+    chrome.storage.local.remove(key).catch(() => { });
+  }
+}
+
+if (els.btnCompare) {
+  els.btnCompare.addEventListener('click', openComparisonTab);
+}
+
+
 /**
  * Ask the content script to fetch an image (so the page's session cookies
  * are sent), then reconstruct the Blob on this side. Returns { blob, type,
@@ -4037,7 +4031,7 @@ function showGateError(message) {
  */
 const GATE_SUBTITLES = {
   switching: 'Sign in as a different user.',
-  first_run: "Use your NSR licence account. You'll stay signed in on this browser.",
+  first_run: "Use your Boost USA licence account. You'll stay signed in on this browser.",
   expired: 'Your session has expired. Sign in again to continue.',
   revoked: 'Your licence is no longer active on this device. Sign in again, or contact your administrator if this is unexpected.',
   signed_out: 'You have been signed out.',
@@ -4239,6 +4233,5 @@ initFeedbackOnClose();
 setRingProgress(0);
 setConnection('idle', 'Idle');
 setStatusBadge('IDLE', 'idle');
-renderSupportedList();
 initColorPickers();
 requestDetection();

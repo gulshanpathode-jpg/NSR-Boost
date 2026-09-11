@@ -623,7 +623,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             action: 'PIPELINE_PROGRESS',
             stage: 'uploading',
             progress: 40,
-            message: 'Saving cover to NSR-Boost…',
+            message: 'Saving cover to Boost USA…',
             stats: scraped.coverStats,
           }).catch(() => { });
 

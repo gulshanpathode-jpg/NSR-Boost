@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Boost USA - Answer Comparison</title>
+  <script src="theme-init.js"></script>
+  <style>
+    :root { color-scheme: light; }
+    :root[data-theme="dark"] { color-scheme: dark; }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       Design tokens - copied from sidepanel.css (via results.html) so the
+       report reads as a continuation of the side panel, not a separate app.
+
+       The LC360 tokens below (--lc-*) are deliberately SEPARATE from the
+       SmartFill ones: the page chrome is SmartFill, but the question
+       controls inside each card imitate the inspection form the reviewer
+       just came from, and that form does not follow this palette.
+       ═══════════════════════════════════════════════════════════════════ */
+    :root {
+      --bg:           #f4f5fb;
+      --card:         #ffffff;
+      --card-hover:   #fafbff;
+
+      --border:        #e5e7f2;
+      --border-strong: #d2d6e8;
+
+      --text:        #14162e;
+      --text-muted:  #5a6079;
+      --text-faint:  #989eb8;
+
+      --primary:        #4f46e5;
+      --primary-hover:  #4338ca;
+      --primary-soft:   #eef0fe;
+      --accent:         #818cf8;
+
+      --success:       #10b981;
+      --success-soft:  #d9f7ec;
+      --warning:       #f59e0b;
+      --warning-soft:  #fdf0d2;
+      --danger:        #ef4444;
+      --danger-soft:   #fde3e3;
+
+      --shadow-sm: 0 1px 2px rgba(16, 29, 29, 0.05);
+      --shadow:    0 6px 18px rgba(16, 29, 29, 0.07);
+
+      --radius:    16px;
+      --radius-sm: 12px;
+
+      --font-sans: 'Segoe UI Variable Text', 'Segoe UI', -apple-system,
+                   BlinkMacSystemFont, 'Inter', Roboto, Helvetica, Arial, sans-serif;
+
+      /* ── LC360 form imitation ─────────────────────────────────────
+         Every value here was read off the live SmartFill: Core Revised
+         form with getComputedStyle rather than eyeballed, so the report
+         reads as the same document the inspector was just looking at:
+
+           body            Roboto 14px/20px, #3e3f3a
+           question label  #555, bold, RIGHT-aligned in its own column
+           option label    #3e3f3a, bold
+           section band    #e9e9e9 on a #ddd hairline, 3px radius
+           text field      1px #99948b, 4px radius, 10px padding
+           row shading     #f5f5f5 on alternate controls
+
+         Kept separate from the SmartFill tokens above on purpose: the page
+         chrome is the extension's, the controls are the website's. */
+      --lc-font:       Roboto, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      --lc-sheet:      #ffffff;
+      --lc-ink:        #3e3f3a;
+      --lc-label:      #555555;
+      --lc-ink-soft:   #6b7280;
+      --lc-hair:       #dddddd;
+      --lc-band:       #e9e9e9;
+      --lc-alt:        #f5f5f5;
+      --lc-rule:       #99948b;
+      --lc-accent:     #1a73e8;
+      --lc-accent-soft:rgba(26, 115, 232, 0.09);
+      --lc-field-bg:   #ffffff;
+      --lc-placeholder:#909090;
+    }
+
+    :root[data-theme="dark"] {
+      --bg:           #0c0e1a;
+      --card:         #151829;
+      --card-hover:   #1a1e33;
+
+      --border:        #262b47;
+      --border-strong: #343b61;
+
+      --text:        #eceef8;
+      --text-muted:  #9aa1c0;
+      --text-faint:  #676e91;
+
+      --primary:       #8a84f5;
+      --primary-hover: #a5a0f8;
+      --primary-soft:  rgba(138, 132, 245, 0.14);
+      --accent:        #b3aefb;
+
+      --success-soft: rgba(16, 185, 129, 0.15);
+      --warning-soft: rgba(245, 158, 11, 0.15);
+      --danger-soft:  rgba(239, 68, 68, 0.15);
+
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+      --shadow:    0 6px 18px rgba(0, 0, 0, 0.45);
+
+      /* The imitated form stays recognisably itself in dark mode - the
+         same shapes and proportions, dimmed rather than restyled. */
+      --lc-sheet:      #121525;
+      --lc-ink:        #dfe3f2;
+      --lc-label:      #b6bcd6;
+      --lc-ink-soft:   #99a0bd;
+      --lc-hair:       #2e3450;
+      --lc-band:       #232840;
+      --lc-alt:        #171b2c;
+      --lc-rule:       #454b6e;
+      --lc-accent:     #6ea8e8;
+      --lc-accent-soft:rgba(110, 168, 232, 0.14);
+      --lc-field-bg:   #191d31;
+      --lc-placeholder:#767d9c;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      font-family: var(--font-sans);
+      font-size: 14px;
+      color: var(--text);
+      background: var(--bg);
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    body { min-height: 100vh; }
+
+    button { font-family: inherit; cursor: pointer; border: 0; background: transparent; }
+    input, select { font-family: inherit; }
+    h1, h2, h3 { font-weight: 600; letter-spacing: -0.2px; }
+
+    /* ── Top bar ──────────────────────────────────────────────────── */
+    .top-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 16px;
+      padding: 14px 24px;
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+      position: sticky; top: 0; z-index: 10;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .brand-icon {
+      width: 30px; height: 30px;
+      border-radius: 9px;
+      background: linear-gradient(135deg, var(--primary), #60a5fa);
+      color: #fff;
+      display: grid; place-items: center;
+      box-shadow: 0 2px 6px rgba(36, 102, 235, 0.28);
+      flex-shrink: 0;
+    }
+    .brand h1 { font-size: 16px; font-weight: 700; letter-spacing: -0.3px; }
+    .brand-sub {
+      font-size: 11.5px; color: var(--text-faint);
+      letter-spacing: .6px; text-transform: uppercase; font-weight: 600;
+    }
+    .top-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 9px 14px;
+      border-radius: 10px;
+      font-size: 13px; font-weight: 600;
+      transition: background 120ms, color 120ms, border-color 120ms;
+    }
+    .btn-primary {
+      background: var(--primary); color: #fff;
+      box-shadow: 0 2px 8px rgba(79, 70, 229, .28);
+    }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-ghost {
+      background: transparent; color: var(--text-muted);
+      border: 1px solid var(--border-strong);
+    }
+    .btn-ghost:hover { background: var(--bg); color: var(--text); }
+
+    /* ── Page shell ───────────────────────────────────────────────── */
+    .page {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 20px 24px 64px;
+      display: flex; flex-direction: column; gap: 16px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-sm);
+      padding: 16px 18px;
+    }
+
+    /* Loading / empty */
+    .loading-container {
+      min-height: 60vh;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 14px; color: var(--text-muted);
+    }
+    .spinner {
+      width: 30px; height: 30px; border-radius: 50%;
+      border: 3px solid var(--border);
+      border-top-color: var(--primary);
+      animation: spin 800ms linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Survey meta ──────────────────────────────────────────────── */
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 14px 22px;
+    }
+    .meta-item { min-width: 0; }
+    .meta-label {
+      font-size: 10.5px; font-weight: 700; letter-spacing: 1.1px;
+      text-transform: uppercase; color: var(--text-faint);
+    }
+    .meta-value {
+      font-size: 13.5px; font-weight: 600; color: var(--text);
+      word-break: break-word;
+    }
+
+    /* ── Stat pills ───────────────────────────────────────────────── */
+    .stats-pills { display: flex; flex-wrap: wrap; gap: 10px; }
+    .stat-pill {
+      display: flex; align-items: baseline; gap: 7px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+    }
+    .stat-num { font-size: 16px; font-weight: 700; }
+    .stat-label { font-size: 11.5px; color: var(--text-muted); font-weight: 600; }
+    .stat-pill.is-diff  .stat-num { color: var(--warning); }
+    .stat-pill.is-match .stat-num { color: var(--success); }
+
+    /* ── Toolbar ──────────────────────────────────────────────────── */
+    .toolbar {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+      justify-content: space-between;
+    }
+    .tb-search {
+      position: relative; flex: 1 1 260px; min-width: 200px;
+      display: flex; align-items: center;
+    }
+    .tb-search svg { position: absolute; left: 11px; color: var(--text-faint); }
+    .tb-search input {
+      width: 100%;
+      padding: 9px 12px 9px 33px;
+      border-radius: 10px;
+      border: 1px solid var(--border-strong);
+      background: var(--bg); color: var(--text);
+      font-size: 13px;
+    }
+    .tb-search input:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+
+    .tb-segment { display: flex; gap: 4px; padding: 4px; background: var(--bg); border-radius: 10px; }
+    .tb-seg-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 12px; border-radius: 7px;
+      font-size: 12.5px; font-weight: 600; color: var(--text-muted);
+    }
+    .tb-seg-btn:hover { color: var(--text); }
+    .tb-seg-btn.is-active { background: var(--card); color: var(--text); box-shadow: var(--shadow-sm); }
+    .seg-count {
+      font-size: 11px; font-weight: 700;
+      padding: 1px 6px; border-radius: 999px;
+      background: var(--border); color: var(--text-muted);
+    }
+    .tb-seg-btn.is-active .seg-count { background: var(--primary-soft); color: var(--primary); }
+
+    .results-meta { font-size: 12.5px; color: var(--text-muted); padding: 0 2px; }
+
+    /* ═══════════════════════════════════════════════════════════════
+       LC360 form imitation
+       ═══════════════════════════════════════════════════════════════
+       One .lc-section per main section heading, one .lc-question per
+       control - the same nesting the real .dyn-mainform uses. */
+
+    .lc-section { display: flex; flex-direction: column; gap: 8px; }
+
+    /* The site's section band: #e9e9e9 on a #ddd hairline, 3px radius,
+       bold #333 at the body size. Sticky here (it isn't on the site) so a
+       long section still says where you are while you scroll it. */
+    .lc-section-title {
+      display: flex; align-items: center; gap: 10px;
+      padding: 7px 10px;
+      border: 1px solid var(--lc-hair);
+      border-radius: 3px;
+      background: var(--lc-band);
+      color: var(--lc-ink);
+      font-family: var(--lc-font);
+      font-size: 14px; font-weight: 700;
+      position: sticky; top: 59px; z-index: 5;
+    }
+    :root[data-theme="dark"] .lc-section-title { color: var(--text); }
+    .lc-section-count {
+      margin-left: auto;
+      font-size: 12px; font-weight: 400; color: var(--lc-ink-soft);
+    }
+
+    /* One control = one .dyn-input-container on the site. Same 6px padding
+       and 4px radius; the status stripe on the left edge is ours, and is
+       the only thing added to the container's own chrome. */
+    .lc-question {
+      font-family: var(--lc-font);
+      font-size: 14px; line-height: 20px;
+      color: var(--lc-ink);
+      background: var(--lc-sheet);
+      border: 1px solid var(--lc-hair);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    /* The site shades alternate controls #f5f5f5. Reproduced on the label
+       column only - shading a whole comparison row would fight the
+       per-column diff tints that carry the actual meaning here. */
+    .lc-question:nth-of-type(even) .lc-q-labelcol { background: var(--lc-alt); }
+    .lc-question.is-diff  { border-left: 3px solid var(--warning); }
+    .lc-question.is-match { border-left: 3px solid var(--success); }
+
+    /* The site's signature layout: the question sits in a fixed left
+       column, right-aligned and bold, with the control area to its right.
+       Here the control area holds one column per answer source. */
+    .lc-q-row {
+      display: grid;
+      grid-template-columns: minmax(180px, 30%) 1fr;
+      align-items: stretch;
+    }
+    .lc-q-labelcol {
+      padding: 10px 14px;
+      border-right: 1px solid var(--lc-hair);
+      display: flex; flex-direction: column; gap: 6px;
+      align-items: flex-end; text-align: right;
+      min-width: 0;
+    }
+    .lc-q-sub {
+      font-size: 10.5px; font-weight: 700; letter-spacing: .8px;
+      text-transform: uppercase; color: var(--text-faint);
+    }
+    .lc-q-label {
+      font-size: 14px; font-weight: 700; color: var(--lc-label);
+      line-height: 20px; word-break: break-word;
+    }
+    .lc-q-badges {
+      display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end;
+      margin-top: auto; padding-top: 4px;
+    }
+    .lc-q-type { font-size: 11.5px; color: var(--lc-ink-soft); font-weight: 400; }
+
+    @media (max-width: 820px) {
+      .lc-q-row { grid-template-columns: 1fr; }
+      .lc-q-labelcol {
+        align-items: flex-start; text-align: left;
+        border-right: 0; border-bottom: 1px solid var(--lc-hair);
+      }
+      .lc-q-badges { justify-content: flex-start; }
+    }
+
+    .pill {
+      flex-shrink: 0;
+      font-size: 10.5px; font-weight: 700;
+      letter-spacing: .6px; text-transform: uppercase;
+      padding: 3px 9px; border-radius: 999px;
+      white-space: nowrap;
+    }
+    .pill-diff  { background: var(--warning-soft); color: #92610a; }
+    .pill-match { background: var(--success-soft); color: #047857; }
+    :root[data-theme="dark"] .pill-diff  { color: #fbbf24; }
+    :root[data-theme="dark"] .pill-match { color: #34d399; }
+
+    /* Columns: one per answer source, hairline-separated. */
+    .lc-columns { display: grid; gap: 1px; background: var(--lc-hair); }
+    .lc-columns.cols-1 { grid-template-columns: 1fr; }
+    .lc-columns.cols-2 { grid-template-columns: repeat(2, 1fr); }
+    .lc-columns.cols-3 { grid-template-columns: repeat(3, 1fr); }
+    @media (max-width: 1000px) {
+      .lc-columns.cols-2, .lc-columns.cols-3 { grid-template-columns: 1fr; }
+    }
+
+    .lc-col {
+      background: var(--lc-sheet);
+      padding: 10px 12px 11px;
+      display: flex; flex-direction: column; gap: 8px;
+      min-width: 0;
+    }
+    .lc-col-head {
+      display: flex; align-items: center; gap: 7px;
+      font-family: var(--font-sans);
+      font-size: 10.5px; font-weight: 700;
+      letter-spacing: .8px; text-transform: uppercase;
+      color: var(--text-muted);
+    }
+    .lc-col-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .lc-col--current .lc-col-dot { background: var(--text-faint); }
+    .lc-col--form .lc-col-dot    { background: var(--primary); }
+    .lc-col--image .lc-col-dot   { background: var(--accent); }
+    .lc-col-helper {
+      font-family: var(--font-sans);
+      font-size: 11px; color: var(--text-faint); line-height: 1.4;
+      margin-top: auto; padding-top: 2px;
+    }
+
+    /* ── The controls themselves ──────────────────────────────────── */
+    .lc-options { display: flex; flex-direction: column; gap: 1px; }
+    .lc-option {
+      display: flex; align-items: flex-start; gap: 7px;
+      padding: 3px 6px;
+      border-radius: 3px;
+      /* The site sets option labels bold #3e3f3a at the body size. */
+      font-size: 14px; font-weight: 700; color: var(--lc-ink);
+      line-height: 20px;
+    }
+    .lc-option.is-on { background: var(--lc-accent-soft); }
+    /* Selected here but not on the form (added) / on the form but dropped
+       by this source (removed). Only ever set on a suggestion column. */
+    .lc-option.is-added   { background: var(--success-soft); }
+    .lc-option.is-removed { background: var(--danger-soft); }
+    .lc-option.is-removed .lc-option-label {
+      text-decoration: line-through;
+      text-decoration-color: rgba(239, 68, 68, .6);
+    }
+
+    /* The site uses native 13x13 inputs. These are spans drawn to match:
+       the report is a document, and a real focusable radio would read as
+       something the reviewer could click to change the form. */
+    .lc-mark {
+      width: 13px; height: 13px; flex-shrink: 0; margin-top: 4px;
+      border: 1px solid #767676;
+      background: var(--lc-field-bg);
+      display: grid; place-items: center;
+    }
+    :root[data-theme="dark"] .lc-mark { border-color: var(--lc-rule); }
+    .lc-mark--radio { border-radius: 50%; }
+    .lc-mark--check { border-radius: 2px; }
+    .lc-option.is-on .lc-mark {
+      background: var(--lc-accent);
+      border-color: var(--lc-accent);
+    }
+    .lc-mark-fill { display: none; }
+    .lc-option.is-on .lc-mark--radio .lc-mark-fill {
+      display: block;
+      width: 5px; height: 5px; border-radius: 50%;
+      background: #fff;
+    }
+    .lc-option.is-on .lc-mark--check .lc-mark-fill {
+      display: block;
+      width: 9px; height: 9px;
+      background: #fff;
+      clip-path: polygon(14% 46%, 0 60%, 39% 100%, 100% 22%, 86% 8%, 39% 72%);
+    }
+
+    .lc-option-label { min-width: 0; word-break: break-word; }
+    .lc-offlist {
+      margin-left: 6px;
+      font-size: 10px; font-weight: 700; letter-spacing: .5px;
+      text-transform: uppercase;
+      padding: 1px 6px; border-radius: 999px;
+      background: var(--warning-soft); color: #92610a;
+      vertical-align: middle;
+    }
+    :root[data-theme="dark"] .lc-offlist { color: #fbbf24; }
+
+    /* Free-text controls: 1px #99948b, 4px radius, 10px padding - the
+       site's TextBox and RichText chrome. */
+    .lc-field {
+      border: 1px solid var(--lc-rule);
+      border-radius: 4px;
+      background: var(--lc-field-bg);
+      padding: 10px;
+      font-size: 14px; line-height: 20px; color: var(--lc-ink);
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .lc-field--textarea { min-height: 80px; border-radius: 3px; }
+    .lc-field--select {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    }
+    .lc-field--select::after {
+      content: ''; flex-shrink: 0;
+      width: 0; height: 0;
+      border-left: 4px solid transparent;
+      border-right: 4px solid transparent;
+      border-top: 5px solid var(--lc-ink-soft);
+    }
+    /* Matches the site's empty-field treatment: italic grey placeholder. */
+    .lc-field.is-empty { color: var(--lc-placeholder); font-style: italic; }
+    .lc-field.is-changed { border-color: var(--warning); background: var(--warning-soft); }
+
+    /* References row */
+    .lc-refs {
+      display: flex; flex-wrap: wrap; gap: 6px;
+      padding: 8px 12px;
+      border-top: 1px solid var(--lc-hair);
+      background: var(--lc-alt);
+      font-family: var(--font-sans);
+    }
+    .lc-ref {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 11.5px; font-weight: 600;
+      padding: 3px 9px; border-radius: 999px;
+      background: var(--card); border: 1px solid var(--border);
+      color: var(--text-muted);
+      max-width: 100%;
+    }
+    .lc-ref-key {
+      color: var(--text-faint); font-weight: 700; text-transform: uppercase;
+      font-size: 10px; letter-spacing: .6px;
+    }
+
+    /* Empty state */
+    .empty-state {
+      text-align: center; padding: 48px 24px; color: var(--text-muted);
+    }
+    .empty-state p { font-size: 15px; font-weight: 600; color: var(--text); }
+    .empty-state span { font-size: 13px; }
+
+    /* ── Print / PDF ──────────────────────────────────────────────────
+       Chrome's "Save as PDF" runs through this. Interactive chrome is
+       dropped, cards are kept whole across page breaks, and the columns
+       stay side by side (print is always wide enough). */
+    @media print {
+      :root { --bg: #fff; --card: #fff; }
+      html, body { background: #fff; }
+      .top-bar, .toolbar, .no-print { display: none !important; }
+      .page { max-width: none; padding: 0; gap: 12px; }
+      .card { box-shadow: none; border-color: #ccc; break-inside: avoid; }
+      /* Print always forces the light palette: a dark-mode reader printing
+         the report wants the document, not a page of inverted ink. */
+      :root[data-theme="dark"] {
+        --lc-sheet: #fff; --lc-ink: #3e3f3a; --lc-label: #555;
+        --lc-hair: #ddd; --lc-band: #e9e9e9; --lc-alt: #f5f5f5;
+        --lc-rule: #99948b; --lc-field-bg: #fff; --lc-accent: #1a73e8;
+        --text: #14162e; --text-muted: #5a6079; --text-faint: #989eb8;
+      }
+      .lc-section-title { position: static; }
+      .lc-question { break-inside: avoid; }
+      /* The stacking breakpoints are viewport-based and would collapse the
+         columns on a print sheet, which is the one place there is always
+         room for them. */
+      .lc-q-row { grid-template-columns: minmax(150px, 26%) 1fr !important; }
+      .lc-columns.cols-2 { grid-template-columns: repeat(2, 1fr) !important; }
+      .lc-columns.cols-3 { grid-template-columns: repeat(3, 1fr) !important; }
+      .lc-section-title, .lc-q-labelcol, .lc-refs,
+      .lc-option.is-on, .lc-option.is-added, .lc-option.is-removed,
+      .lc-option.is-on .lc-mark, .pill, .lc-field.is-changed {
+        -webkit-print-color-adjust: exact; print-color-adjust: exact;
+      }
+      @page { size: A4 landscape; margin: 12mm; }
+    }
+  </style>
+</head>
+<body>
+
+  <header class="top-bar">
+    <div class="brand">
+      <div class="brand-icon" aria-hidden="true">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2.2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="7" height="16" rx="1.5"/>
+          <rect x="14" y="4" width="7" height="16" rx="1.5"/>
+        </svg>
+      </div>
+      <div>
+        <h1>Answer Comparison</h1>
+        <div class="brand-sub" id="cHeaderSub">Smart Fill &middot; Boost USA</div>
+      </div>
+    </div>
+    <div class="top-actions no-print">
+      <button class="btn btn-ghost" id="btnPrint" type="button" title="Open the browser print dialog (choose 'Save as PDF' for a PDF)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="6 9 6 2 18 2 18 9"/>
+          <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
+          <rect x="6" y="14" width="12" height="8"/>
+        </svg>
+        <span>Print / PDF</span>
+      </button>
+      <button class="btn btn-primary" id="btnExport" type="button" title="Download this report as a Word document">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        <span>Export Word</span>
+      </button>
+    </div>
+  </header>
+
+  <div id="loadingState" class="loading-container">
+    <div class="spinner"></div>
+    <p>Loading comparison&hellip;</p>
+  </div>
+
+  <main id="reportContainer" class="page" style="display:none;">
+
+    <!-- Survey metadata -->
+    <section class="card">
+      <div class="meta-grid" id="cMetaGrid"></div>
+    </section>
+
+    <!-- Stats -->
+    <section class="card">
+      <div class="stats-pills" id="cStats"></div>
+    </section>
+
+    <!-- Toolbar -->
+    <section class="card toolbar no-print">
+      <div class="tb-search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="8"/>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input type="text" id="cSearch" placeholder="Search questions, sections or answers&hellip;"
+               autocomplete="off" />
+      </div>
+      <div class="tb-segment" id="cFilter" role="tablist" aria-label="Filter questions">
+        <button class="tb-seg-btn is-active" data-filter="all" role="tab" aria-selected="true">
+          <span>All</span><span class="seg-count" id="cCountAll">0</span>
+        </button>
+        <button class="tb-seg-btn" data-filter="different" role="tab" aria-selected="false">
+          <span>Different</span><span class="seg-count" id="cCountDifferent">0</span>
+        </button>
+        <button class="tb-seg-btn" data-filter="matched" role="tab" aria-selected="false">
+          <span>Matches</span><span class="seg-count" id="cCountMatched">0</span>
+        </button>
+      </div>
+    </section>
+
+    <div class="results-meta" id="cViewMeta"></div>
+
+    <div id="cSections"></div>
+  </main>
+
+  <script src="compare.js"></script>
+</body>
+</html>
