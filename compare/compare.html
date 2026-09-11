@@ -593,8 +593,18 @@
       overflow-wrap: anywhere; word-break: break-all;
     }
 
-    /* Print-only masthead; the screen keeps the interactive .top-bar. */
-    .print-head { display: none; }
+    .export-error {
+      max-width: 1180px;
+      margin: 12px auto -4px;
+      padding: 9px 12px;
+      border: 1px solid var(--danger);
+      border-radius: 10px;
+      background: var(--danger-soft);
+      color: var(--danger);
+      font-size: 12.5px;
+      font-weight: 600;
+    }
+    .export-error[hidden] { display: none; }
 
     /* Empty state */
     .empty-state {
@@ -635,19 +645,13 @@
         -webkit-print-color-adjust: exact; print-color-adjust: exact;
       }
 
-      /* The document's own title block, in place of the hidden top bar. */
-      .print-head { display: block; margin: 0 0 10px; }
-      .print-head-title {
-        font-size: 15pt; font-weight: 700; color: #14162e;
-      }
-      .print-head-meta {
-        display: flex; gap: 14px;
-        font-size: 8.5pt; color: #5a6079;
-      }
+      /* This sheet is no longer what "Export PDF" uses - that builds a real
+         PDF in compare.js. It still governs a plain Ctrl+P of the live
+         page, which is worth keeping correct.
 
-      /* Every source-photo list is expanded on paper - a disclosure the
+         Every source-photo list is expanded on paper: a disclosure the
          reader left shut is a UI state, not a decision about what belongs
-         in the report. The opening itself is done in JS (the beforeprint
+         in the printout. The opening itself is done in JS (the beforeprint
          handler sets the `open` attribute), because a closed <details> is
          hidden by the UA through ::details-content rather than through a
          `display` this sheet could override. */
@@ -696,18 +700,9 @@
     </div>
   </header>
 
-  <!-- Print-only masthead. The on-screen top bar is chrome (buttons, a live
-       subtitle) and is hidden on paper; this is the document's own title
-       block, and it carries the scope line so an exported PDF made under a
-       filter or a search says so rather than passing as the whole survey.
-       exportPdf() fills both spans immediately before printing. -->
-  <div class="print-head" aria-hidden="true">
-    <div class="print-head-title">Smart Fill — Answer Comparison</div>
-    <div class="print-head-meta">
-      <span id="cPrintScope"></span>
-      <span id="cPrintStamp"></span>
-    </div>
-  </div>
+  <!-- Export failures land here rather than only in the console: a download
+       that silently does not happen looks exactly like a slow one. -->
+  <p class="export-error no-print" id="cExportError" hidden></p>
 
   <div id="loadingState" class="loading-container">
     <div class="spinner"></div>
@@ -756,6 +751,11 @@
     <div id="cSections"></div>
   </main>
 
+  <!-- jsPDF + AutoTable back "Export PDF". Vendored rather than pulled from
+       a CDN because an extension page runs under script-src 'self', which
+       blocks remote scripts outright. See vendor/README.md. -->
+  <script src="../vendor/jspdf.umd.min.js"></script>
+  <script src="../vendor/jspdf.plugin.autotable.min.js"></script>
   <script src="compare.js"></script>
 </body>
 </html>

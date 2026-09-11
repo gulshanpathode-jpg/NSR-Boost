@@ -25,11 +25,10 @@
  *   radio would invite a reviewer to think they were editing the form.
  *
  * Export:
- *   "Export PDF" prints the CURRENT VIEW (search + filter applied) through
- *   the browser's own print pipeline, with Save as PDF as the destination.
- *   The print stylesheet in compare.html does the layout work; exportPdf()
- *   only stamps the scope and the filename. See the note above wireExport()
- *   for why this is not a Word export.
+ *   "Export PDF" builds a real PDF of the CURRENT VIEW (search + filter
+ *   applied) with jsPDF + AutoTable, and downloads it directly - no print
+ *   dialog. See the note above wireExport() for the two approaches this
+ *   replaced and why neither worked.
  */
 
 'use strict';
@@ -49,7 +48,35 @@ document.addEventListener('DOMContentLoaded', () => {
   wireToolbar();
   wireExport();
   wireThumbFallback();
+  wirePrintFallback();
 });
+
+/**
+ * Expand every source-photo disclosure while the page is being printed.
+ *
+ * Not the export path - "Export PDF" builds its own document and never
+ * touches the DOM. This is for a plain Ctrl+P of the live page, where a
+ * row the reader happened to leave collapsed would otherwise take its
+ * links out of the printout. Only the ones opened here are re-closed, so
+ * a row the reader had expanded stays expanded afterwards.
+ *
+ * It has to set the attribute for real: a closed <details> is hidden by
+ * the user agent through ::details-content, which a print stylesheet
+ * cannot reach.
+ */
+function wirePrintFallback() {
+  let openedForPrint = [];
+
+  window.addEventListener('beforeprint', () => {
+    openedForPrint = Array.from(document.querySelectorAll('.lc-photos:not([open])'));
+    openedForPrint.forEach((d) => { d.open = true; });
+  });
+
+  window.addEventListener('afterprint', () => {
+    openedForPrint.forEach((d) => { d.open = false; });
+    openedForPrint = [];
+  });
+}
 
 /**
  * Drop any source-photo thumbnail that fails to load.
@@ -122,7 +149,7 @@ function render(data) {
   const survey = view.meta.surveyNumber ? ` · Survey ${view.meta.surveyNumber}` : '';
   document.title = `Boost USA - Answer Comparison${survey}`;
   const sub = document.getElementById('cHeaderSub');
-  if (sub) sub.textContent = (view.meta.formName || 'Smart Fill') + (survey ? ` — Survey ${view.meta.surveyNumber}` : '');
+  if (sub) sub.textContent = (view.meta.formName || 'Smart Fill') + (survey ? ` · Survey ${view.meta.surveyNumber}` : '');
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -575,86 +602,396 @@ function wireToolbar() {
 }
 
 
+
 // ─────────────────────────────────────────────────────────────────────
 // 7  Export
 // ─────────────────────────────────────────────────────────────────────
 //
-// One button, one output: a PDF, produced by the browser's own print
-// pipeline with "Save as PDF" as the destination.
+// "Export PDF" writes a real PDF straight to the user's downloads. No
+// dialog, no destination to pick, no intermediate format.
 //
-// This replaced a Word export that was not really a Word export. That code
-// built an HTML string, typed the Blob `application/msword` and named the
-// file .doc - a format Word will usually open, but which is HTML underneath
-// and which any other handler (WordPad, a browser, a PDF viewer, Google
-// Docs) shows as raw markup, `<!--[if gte mso 9]><xml>` block and all.
-// Producing a real .docx would mean hand-writing a ZIP container and OOXML
-// parts, because the extension CSP blocks loading a library from a CDN.
-// Printing to PDF needs none of that, renders exactly what the reader sees,
-// and keeps the <a href> links on the source photos live in the output.
+// Two earlier attempts are worth recording, because both look like the
+// obvious answer and neither is:
 //
-// What the print stylesheet in compare.html contributes: it hides the
-// chrome, forces the light palette, restores the column grid that the
-// viewport breakpoints would otherwise collapse, and opens every photo
-// disclosure so the links are in the PDF whether or not they were expanded
-// on screen.
+//   · A .doc file. That was HTML with an `application/msword` label on
+//     it. Word usually opened it; everything else showed the raw markup,
+//     `<!--[if gte mso 9]><xml>` block included.
+//   · window.print(). Renders beautifully - it is the live page - but it
+//     can only ever OPEN the print dialog. A page cannot choose Save as
+//     PDF on the user's behalf, and nothing in the web platform lets it.
+//
+// So the PDF is built here, with jsPDF + AutoTable vendored under
+// /vendor (an extension page runs under `script-src 'self'`, so a CDN
+// script is blocked outright - see vendor/README.md).
+//
+// The document is ONE AutoTable for the whole report rather than a table
+// per question. That buys page breaks, a column header that repeats on
+// every page, and one consistent set of column widths throughout, none of
+// which is true of a stack of small tables.
 
 function wireExport() {
   const exportBtn = document.getElementById('btnExport');
   if (exportBtn) exportBtn.addEventListener('click', exportPdf);
+}
 
-  // Bound to the window events rather than called from exportPdf(), so
-  // Ctrl+P and the browser menu produce the same document as the button.
-  //
-  // A closed <details> is hidden by the user agent through
-  // ::details-content, which a print stylesheet cannot reach - so the
-  // attribute has to be set for real and put back afterwards. Only the
-  // ones we opened are re-closed, so a row the reader had expanded stays
-  // expanded once the dialog is dismissed.
-  let openedForPrint = [];
+/** Palette, as jsPDF RGB triples. Mirrors the on-screen LC360 imitation. */
+const PDF = {
+  margin: 34,
+  ink:      [62, 63, 58],
+  label:    [85, 85, 85],
+  muted:    [107, 114, 128],
+  faint:    [144, 148, 168],
+  hair:     [221, 221, 221],
+  band:     [233, 233, 233],
+  alt:      [245, 245, 245],
+  head:     [250, 250, 250],
+  brand:    [31, 42, 68],
+  link:     [26, 115, 232],
+  on:       [232, 241, 250],
+  added:    [217, 247, 236],
+  removed:  [253, 227, 227],
+  changed:  [253, 240, 210],
+};
 
-  window.addEventListener('beforeprint', () => {
-    openedForPrint = Array.from(document.querySelectorAll('.lc-photos:not([open])'));
-    openedForPrint.forEach((d) => { d.open = true; });
-  });
+/**
+ * Build the PDF for the CURRENT VIEW and hand it to the browser.
+ *
+ * doc.save() creates a blob URL and clicks it, which in an extension page
+ * lands in the normal downloads flow: the file appears in the download
+ * shelf under the name below, and nothing is asked of the user.
+ */
+function exportPdf() {
+  const ctor = window.jspdf && window.jspdf.jsPDF;
+  const btn = document.getElementById('btnExport');
 
-  window.addEventListener('afterprint', () => {
-    openedForPrint.forEach((d) => { d.open = false; });
-    openedForPrint = [];
-  });
+  if (!ctor) {
+    // Only reachable if the vendored script did not load, which for a
+    // packaged extension means the file is missing from the build.
+    setExportError('PDF export is unavailable - the PDF library did not load.');
+    return;
+  }
+
+  if (btn) btn.disabled = true;
+  try {
+    const doc = new ctor({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+    buildPdf(doc);
+    doc.save(exportFilename() + '.pdf');
+    setExportError('');
+  } catch (err) {
+    console.error('[SmartFill] PDF export failed:', err);
+    setExportError('Could not build the PDF: ' + ((err && err.message) || err));
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 /**
- * Print the report, scoped to the CURRENT VIEW.
+ * Surface an export failure in the page, not only in the console.
  *
- * Two things happen around the print() call, both of which have to be undone
- * afterwards:
- *
- *   · The document title becomes the export filename. Chrome seeds the
- *     "Save as" name from document.title, so this is the only way to get a
- *     meaningful filename out of a print-to-PDF without asking the user to
- *     retype it.
- *   · A scope line is written into the print-only header, so a PDF made
- *     while a filter or search was active says so on its face rather than
- *     silently looking like the whole survey.
- *
- * print() is synchronous - it returns once the dialog closes - so the
- * restore runs after the user has saved or cancelled either way. It is
- * still in a finally, because a print dialog that throws (headless, a
- * blocked pop-up) must not leave the page renamed.
+ * A download that silently does not happen is indistinguishable from a
+ * slow one, and this is the button people press when they need to hand
+ * the report to someone else.
  */
-function exportPdf() {
-  const previousTitle = document.title;
-  const scopeEl = document.getElementById('cPrintScope');
-  const stampEl = document.getElementById('cPrintStamp');
+function setExportError(message) {
+  const el = document.getElementById('cExportError');
+  if (!el) return;
+  el.textContent = message || '';
+  el.hidden = !message;
+}
 
-  if (scopeEl) scopeEl.textContent = scopeLine();
-  if (stampEl) stampEl.textContent = 'Generated ' + formatTimestamp(view.meta.generatedAt);
-  document.title = exportFilename();
+/**
+ * The answer sources the DOCUMENT has columns for.
+ *
+ * Decided once across every visible question rather than per question: a
+ * table wants one stable grid, and a column that would be empty for the
+ * whole export (no image pass was run, say) is dropped instead of printed
+ * blank all the way down.
+ */
+function reportColumns() {
+  const qs = visibleSections().reduce((acc, s) => acc.concat(s.questions), []);
+  const cols = [{
+    kind: 'current',
+    title: 'Current form value',
+    helper: 'Saved on the inspection form',
+  }];
+  if (qs.some((q) => q.formPass)) {
+    cols.push({ kind: 'form', title: 'Page / Form suggestion', helper: 'From the form pages' });
+  }
+  if (qs.some((q) => q.imagePass)) {
+    cols.push({ kind: 'image', title: 'AI suggestion', helper: 'From the inspection images' });
+  }
+  return cols;
+}
 
-  try {
-    window.print();
-  } finally {
-    document.title = previousTitle;
+function valueForKind(q, kind) {
+  if (kind === 'current') return q.currentAnswer;
+  if (kind === 'form') return q.formPass ? q.formPass.answer : '';
+  if (kind === 'image') return q.imagePass ? q.imagePass.answer : '';
+  return '';
+}
+
+function buildPdf(doc) {
+  const cols = reportColumns();
+  const n = cols.length;
+  const pageW = doc.internal.pageSize.getWidth();
+  let y = PDF.margin;
+
+  // ── Masthead ────────────────────────────────────────────────────
+  doc.setFont('helvetica', 'bold').setFontSize(15).setTextColor(...PDF.brand);
+  doc.text('Smart Fill Answer Comparison', PDF.margin, y + 4);
+  y += 18;
+
+  doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(...PDF.muted);
+  doc.text('Current form value versus the AI suggestions, question by question.', PDF.margin, y);
+  y += 14;
+
+  // ── Metadata ────────────────────────────────────────────────────
+  const m = view.meta;
+  const metaRows = [
+    ['Form', m.formName || '-'],
+    ['Survey number', m.surveyNumber || '-'],
+    ['Survey type', m.surveyType || '-'],
+    ['Location', m.address || '-'],
+    ['Result ID', m.resultId || '-'],
+    ['Generated', formatTimestamp(m.generatedAt)],
+    ['Scope', scopeLine()],
+  ];
+
+  doc.autoTable({
+    startY: y,
+    body: metaRows,
+    theme: 'grid',
+    styles: {
+      font: 'helvetica', fontSize: 8.5, cellPadding: 4,
+      lineColor: PDF.hair, lineWidth: 0.5, textColor: PDF.ink,
+    },
+    columnStyles: {
+      0: { cellWidth: 110, fillColor: PDF.alt, fontStyle: 'bold', textColor: PDF.label },
+      1: { cellWidth: 'auto' },
+    },
+    margin: { left: PDF.margin, right: PDF.margin },
+  });
+
+  y = doc.lastAutoTable.finalY + 14;
+
+  // ── The report body ─────────────────────────────────────────────
+  const body = [];
+  visibleSections().forEach((section) => {
+    body.push([{
+      content: section.text || 'General',
+      colSpan: n,
+      styles: {
+        fillColor: PDF.band, textColor: [51, 51, 51],
+        fontStyle: 'bold', fontSize: 10, cellPadding: 5,
+      },
+    }]);
+    section.questions.forEach((q) => pushQuestionRows(body, q, cols));
+  });
+
+  if (body.length === 0) {
+    doc.setFont('helvetica', 'italic').setFontSize(10).setTextColor(...PDF.faint);
+    doc.text('No questions matched the current view.', PDF.margin, y + 10);
+    stampPageNumbers(doc);
+    return;
+  }
+
+  const colWidth = (pageW - PDF.margin * 2) / n;
+
+  doc.autoTable({
+    startY: y,
+    head: [cols.map((c) => c.title.toUpperCase() + '\n' + c.helper)],
+    body,
+    theme: 'grid',
+    styles: {
+      font: 'helvetica', fontSize: 8.5, cellPadding: 4,
+      lineColor: PDF.hair, lineWidth: 0.5, textColor: PDF.ink,
+      overflow: 'linebreak', valign: 'top',
+    },
+    headStyles: {
+      fillColor: PDF.head, textColor: [90, 96, 121], fontStyle: 'bold',
+      fontSize: 7.5, cellPadding: 4, lineColor: PDF.hair, lineWidth: 0.5,
+    },
+    columnStyles: Object.fromEntries(cols.map((_, i) => [i, { cellWidth: colWidth }])),
+    margin: { left: PDF.margin, right: PDF.margin },
+    // AutoTable can only keep a SINGLE row off a page boundary, which is
+    // why rows here are kept small and uniform rather than one tall row
+    // per question: each option line can then move to the next page on
+    // its own instead of dragging a whole question with it.
+    rowPageBreak: 'avoid',
+    didDrawCell: (data) => {
+      // Source-photo rows carry their URL on the cell definition, which
+      // AutoTable hands back as `raw`. Drawn as an annotation over the
+      // cell box, so the whole row is the click target.
+      const raw = data.cell.raw;
+      if (data.section === 'body' && raw && raw._url) {
+        doc.link(data.cell.x, data.cell.y, data.cell.width, data.cell.height, { url: raw._url });
+      }
+    },
+  });
+
+  stampPageNumbers(doc);
+}
+
+/**
+ * One question, as a run of table rows:
+ *
+ *   · a head row spanning every column (label, type, MATCHES / DIFFERENT)
+ *   · one row per option for choice questions, so each option lines up
+ *     across the sources and every cell can carry its own diff tint - or
+ *     a single row carrying the text, for everything else
+ *   · a references block, one row per source photo
+ */
+function pushQuestionRows(body, q, cols) {
+  const n = cols.length;
+  const head = [];
+  if (q.subheader) head.push(q.subheader.toUpperCase());
+  head.push(q.questionText || '(no label)');
+  const type = TYPE_LABEL[q.inputType] || q.inputType || 'Text';
+  head.push(type + '  |  ' + (q.matchesCurrent ? 'MATCHES' : 'DIFFERENT'));
+
+  body.push([{
+    content: head.join('\n'),
+    colSpan: n,
+    styles: {
+      fillColor: PDF.alt, textColor: PDF.label, fontStyle: 'bold',
+      fontSize: 9, cellPadding: { top: 5, right: 6, bottom: 5, left: 6 },
+    },
+  }]);
+
+  if (isChoice(q.inputType)) pushOptionRows(body, q, cols);
+  else pushFieldRow(body, q, cols);
+
+  pushRefRows(body, q, cols);
+}
+
+/**
+ * Choice questions: rows are options, columns are sources.
+ *
+ * The marks are ASCII - `[x]` / `[ ]` for checkboxes, `(o)` / `( )` for
+ * radios - rather than the ballot-box and bullet characters the screen
+ * uses. jsPDF's built-in fonts are the PDF base-14 set, which is WinAnsi
+ * and stops at Latin-1, so U+2610 and friends would come out as noise.
+ * Embedding a Unicode face would cost a few hundred KB for two glyphs.
+ */
+function pushOptionRows(body, q, cols) {
+  const checkbox = q.inputType === 'checkbox';
+  const on = checkbox ? '[x]' : '(o)';
+  const off = checkbox ? '[ ]' : '( )';
+
+  const currentSet = toSelectedSet(q.currentAnswer);
+  const options = Array.isArray(q.options) ? q.options : [];
+  const known = new Set(options.map((o) => keyOf(o.label)));
+
+  const perCol = cols.map((c) => ({
+    kind: c.kind,
+    selected: toSelectedSet(valueForKind(q, c.kind)),
+    extras: [],
+  }));
+
+  // Answers the backend returned that are not options of this control.
+  // They cannot be applied as-is, so they have to be visible rather than
+  // silently dropped.
+  perCol.forEach((pc) => {
+    labelsOf(valueForKind(q, pc.kind)).forEach((label, k) => {
+      if (!known.has(k)) pc.extras.push(label);
+    });
+  });
+
+  options.forEach((opt) => {
+    const k = keyOf(opt.label);
+    body.push(perCol.map((pc) => {
+      const picked = pc.selected.has(k);
+      const styles = {};
+      if (picked) { styles.fillColor = PDF.on; styles.fontStyle = 'bold'; }
+      // Diff tints belong only on the suggestion columns - "changed
+      // relative to the current value" means nothing on the current value.
+      if (pc.kind !== 'current') {
+        if (picked && !currentSet.has(k)) styles.fillColor = PDF.added;
+        else if (!picked && currentSet.has(k)) styles.fillColor = PDF.removed;
+      }
+      return { content: (picked ? on : off) + ' ' + opt.label, styles };
+    }));
+  });
+
+  const extraDepth = perCol.reduce((max, pc) => Math.max(max, pc.extras.length), 0);
+  for (let i = 0; i < extraDepth; i++) {
+    body.push(perCol.map((pc) => {
+      const label = pc.extras[i];
+      if (!label) return { content: '' };
+      return {
+        content: on + ' ' + label + '  (not an option)',
+        styles: { fillColor: PDF.added, fontStyle: 'bold' },
+      };
+    }));
+  }
+
+  if (options.length === 0 && extraDepth === 0) {
+    body.push(cols.map(() => ({
+      content: 'No answer',
+      styles: { textColor: PDF.faint, fontStyle: 'italic' },
+    })));
+  }
+}
+
+/** Text / textarea / select: one row, the value in each column. */
+function pushFieldRow(body, q, cols) {
+  const currentText = formatAnswer(q.currentAnswer);
+  body.push(cols.map((c) => {
+    const text = formatAnswer(valueForKind(q, c.kind));
+    if (!text) {
+      return { content: 'No answer', styles: { textColor: PDF.faint, fontStyle: 'italic' } };
+    }
+    const changed = c.kind !== 'current' && keyOf(text) !== keyOf(currentText);
+    return { content: text, styles: changed ? { fillColor: PDF.changed } : {} };
+  }));
+}
+
+/**
+ * Pages consulted, and the source photos.
+ *
+ * Each photo gets its own full-width row so the whole row can become one
+ * link annotation (see didDrawCell) and so the URL - a long unbroken
+ * query string - has the full page width to wrap into. The URL is printed
+ * as text as well as linked, because a PDF that gets printed on paper
+ * loses the annotation, and then the URL is the only way back to it.
+ */
+function pushRefRows(body, q, cols) {
+  const n = cols.length;
+  const labels = (q.formPass && Array.isArray(q.formPass.sourceLabels)) ? q.formPass.sourceLabels : [];
+  const photos = sourcePhotosOf(q);
+
+  const refStyles = {
+    fillColor: PDF.alt, textColor: [90, 96, 121], fontSize: 7.5,
+    cellPadding: { top: 3, right: 6, bottom: 3, left: 6 },
+  };
+
+  if (labels.length) {
+    body.push([{
+      content: 'Pages consulted: ' + labels.join(', '),
+      colSpan: n,
+      styles: refStyles,
+    }]);
+  }
+
+  photos.forEach((p, i) => {
+    body.push([{
+      content: 'Source image ' + (i + 1) + ':  ' + p.url,
+      colSpan: n,
+      styles: Object.assign({}, refStyles, { textColor: PDF.link }),
+      _url: p.url,
+    }]);
+  });
+}
+
+/** "Page 2 of 7", bottom-right, added once the page count is known. */
+function stampPageNumbers(doc) {
+  const total = doc.internal.getNumberOfPages();
+  const w = doc.internal.pageSize.getWidth();
+  const h = doc.internal.pageSize.getHeight();
+  for (let i = 1; i <= total; i++) {
+    doc.setPage(i);
+    doc.setFont('helvetica', 'normal').setFontSize(7.5).setTextColor(...PDF.faint);
+    doc.text('Page ' + i + ' of ' + total, w - PDF.margin, h - 16, { align: 'right' });
   }
 }
 
@@ -664,23 +1001,21 @@ function scopeLine() {
   const total = allQuestions().length;
 
   const notes = [];
-  if (view.filter !== 'all') notes.push(`filter: ${view.filter}`);
-  if (view.search.trim()) notes.push(`search: "${view.search.trim()}"`);
+  if (view.filter !== 'all') notes.push('filter: ' + view.filter);
+  if (view.search.trim()) notes.push('search: "' + view.search.trim() + '"');
 
   if (shown === total && notes.length === 0) {
-    return `All ${total} question${total === 1 ? '' : 's'}`;
+    return 'All ' + total + ' question' + (total === 1 ? '' : 's');
   }
-  return `${shown} of ${total} questions (${notes.join(', ')})`;
+  return shown + ' of ' + total + ' questions (' + notes.join(', ') + ')';
 }
 
-/**
- * Seeds the Save-as-PDF filename. No extension: Chrome appends .pdf itself,
- * and a literal ".pdf" here comes back as "….pdf.pdf".
- */
+/** Downloaded filename, without the extension - exportPdf() appends .pdf. */
 function exportFilename() {
-  const survey = view.meta.surveyNumber ? `-Survey-${view.meta.surveyNumber}` : '';
+  const survey = view.meta.surveyNumber ? '-Survey-' + view.meta.surveyNumber : '';
   const d = new Date();
   const pad = (n) => String(n).padStart(2, '0');
-  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
-  return `SmartFill-Answer-Comparison${survey}-${stamp}`;
+  const stamp = d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate())
+    + '-' + pad(d.getHours()) + pad(d.getMinutes());
+  return 'SmartFill-Answer-Comparison' + survey + '-' + stamp;
 }

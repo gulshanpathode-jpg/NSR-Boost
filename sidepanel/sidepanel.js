@@ -4241,8 +4241,8 @@ function renderProfileChip(session) {
   }
   gateEls.chipName.textContent = session.username;
   gateEls.chip.title = session.plan_name
-    ? `Signed in as ${session.username} (${session.plan_name}) — click to sign out`
-    : `Signed in as ${session.username} — click to sign out`;
+    ? `Signed in as ${session.username} (${session.plan_name}) - click to sign out`
+    : `Signed in as ${session.username} - click to sign out`;
   gateEls.chip.hidden = false;
 }
 
@@ -4328,7 +4328,7 @@ async function submitLogin(username, password) {
       // blocked by that - the token is valid - but it expires on the LMS's own
       // schedule, and someone who is never told will be locked out with no idea
       // why. Say it once, prominently, rather than burying it.
-      showToast('Your password is temporary — change it in the admin portal', 8000);
+      showToast('Your password is temporary - change it in the admin portal', 8000);
     } else {
       showToast(`Signed in as ${result.session.username}`);
     }

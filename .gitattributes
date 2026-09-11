@@ -1,0 +1,4 @@
+# Vendored third-party files are committed verbatim so they can be checked
+# against the upstream URLs in vendor/README.md. Line-ending conversion would
+# change their bytes and break that comparison, so it is turned off here.
+vendor/** -text
